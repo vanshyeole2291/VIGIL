@@ -8,6 +8,7 @@ import SecuritySurveillanceView from './components/SecuritySurveillanceView';
 import EvidenceVaultView from './components/EvidenceVaultView';
 import CameraNetworkView from './components/CameraNetworkView';
 import SystemHealthView from './components/SystemHealthView';
+import ModelPerformanceView from './components/ModelPerformanceView';
 
 function App() {
   const [currentView, setCurrentView] = useState('main-command-hub');
@@ -177,6 +178,10 @@ function App() {
                 signals={state.signals}
                 emergencyActive={isEmergency}
               />
+            )}
+
+            {currentView === 'model-performance' && (
+              <ModelPerformanceView />
             )}
 
             {currentView === 'security-surveillance' && (

@@ -9,6 +9,7 @@ Serves:
 """
 
 import asyncio
+import json
 import os
 import sys
 from typing import Set, Optional, Dict
@@ -210,6 +211,8 @@ async def api_incidents():
         if records:
             res = []
             for inc in records:
+                tier = inc.validation_status or ("confirmed" if inc.incident_type != "accident" else "confirmed by configured rules")
+                is_sim = "test" in str(tier).lower() or "demo" in str(tier).lower() or "[simulation" in str(inc.description).lower()
                 res.append({
                     "id": inc.id,
                     "type": inc.incident_type,
@@ -220,8 +223,10 @@ async def api_incidents():
                     "timestamp": inc.timestamp,
                     "frame_b64": inc.snapshot_b64,
                     "severity": inc.severity,
-                    "status": inc.status,
-                    "validation_status": inc.validation_status,
+                    "status": inc.status or "new",
+                    "validation_status": tier,
+                    "confirmation_tier": tier,
+                    "is_simulation": is_sim,
                     "evidence_id": inc.evidence_id,
                 })
             db.close()
@@ -233,6 +238,39 @@ async def api_incidents():
     if processor:
         return JSONResponse(processor.get_incident_history())
     return JSONResponse([])
+
+
+class UpdateIncidentStatusRequest(BaseModel):
+    status: str
+
+
+@app.patch("/api/incidents/{incident_id}/status")
+async def api_update_incident_status(incident_id: str, req: UpdateIncidentStatusRequest):
+    """Update status of a recorded incident (e.g., new -> acknowledged -> resolved)."""
+    new_status = req.status.lower()
+    updated = False
+    if processor and hasattr(processor, "incident_history"):
+        with processor.state_lock:
+            for inc in processor.incident_history:
+                if inc.get("id") == incident_id:
+                    inc["status"] = new_status
+                    updated = True
+                    break
+
+    from backend.database import SessionLocal
+    import backend.models.db_models as db_models
+    try:
+        db = SessionLocal()
+        db_inc = db.query(db_models.Incident).filter(db_models.Incident.id == incident_id).first()
+        if db_inc:
+            db_inc.status = new_status
+            db.commit()
+            updated = True
+        db.close()
+    except Exception as e:
+        print(f"[Incident] Status update DB error: {e}")
+
+    return JSONResponse({"status": "ok", "incident_id": incident_id, "new_status": new_status, "updated": updated})
 
 
 @app.get("/api/v2x/spat")
@@ -369,6 +407,20 @@ async def api_ml_harvest():
         )
         return JSONResponse({"status": "harvested" if sample else "skipped_cooldown", "sample": sample})
     raise HTTPException(status_code=503, detail="Processor offline")
+
+
+@app.get("/api/ml/baseline-benchmark")
+async def api_ml_baseline_benchmark():
+    """Return the measured baseline benchmark metrics from reports/baseline_benchmark.json."""
+    benchmark_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports", "baseline_benchmark.json")
+    if os.path.exists(benchmark_path):
+        try:
+            with open(benchmark_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return JSONResponse(data)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"status": "not_found", "message": "Baseline benchmark report not found"}, status_code=404)
 
 
 @app.get("/api/benchmark/comparison")
@@ -596,8 +648,10 @@ async def api_simulate_incident(req: SimulateIncidentRequest):
     if hasattr(processor, "record_incident"):
         processor.record_incident(
             inc_type=inc_type,
-            description=desc,
-            lane=lane
+            description=f"[DEMO / TEST EVENT] {desc}",
+            lane=lane,
+            is_simulation=True,
+            confirmation_tier="test/demo event"
         )
     
     # 2. Add real-time alert to analyzer

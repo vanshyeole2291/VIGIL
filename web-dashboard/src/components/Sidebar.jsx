@@ -11,6 +11,7 @@ export default function Sidebar({
   const navItems = [
     { id: 'main-command-hub', label: 'Command Hub', icon: 'dashboard' },
     { id: '4-way-ai-perception', label: 'Traffic Perception', icon: 'traffic' },
+    { id: 'model-performance', label: 'Model Performance', icon: 'analytics' },
     { id: 'security-surveillance', label: 'Violence & Security', icon: 'security' },
     { id: 'incidents', label: 'Incident Archive', icon: 'warning' },
     { id: 'evidence-vault', label: 'Evidence Vault', icon: 'videocam' },

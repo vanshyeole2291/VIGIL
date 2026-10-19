@@ -248,3 +248,104 @@ class TestEmergencyVisualAndAudio:
         metrics = analyzer.get_metrics([fire_track], lane_stats)
         assert metrics["fire_truck_active"] is True
         assert metrics["emergency_active"] is True
+
+    def test_yellow_clearance_transition_safety_invariant(self):
+        """Emergency preemption on a conflicting lane enforces yellow clearance before green shift."""
+        opt = SignalOptimizer()
+        # Force North to be currently green
+        opt._phase_idx = opt.PHASE_ORDER.index("North")
+        opt._activate_phase(opt._phase_idx)
+        assert opt.signals["North"].state == SignalState.GREEN
+        
+        # Emergency vehicle appears on East
+        opt.trigger_emergency("East", source="visual")
+        
+        # North must immediately transition to YELLOW to allow vehicles to clear intersection safely
+        assert opt._in_yellow is True
+        assert opt.signals["North"].state == SignalState.YELLOW
+        assert opt.signals["North"].time_left == config.YELLOW_DURATION
+
+    def test_brief_occlusion_cushion_maintains_emergency_state(self):
+        """Brief single-frame detection dropouts are cushioned by tracker voting memory."""
+        tracker = CentroidTracker(max_disappeared=5)
+        amb_det = Detection(
+            box=(100, 100, 200, 200),
+            label="ambulance",
+            confidence=0.92,
+            class_id=80,
+            is_vehicle=True,
+            is_person=False,
+            is_ambulance=True,
+            pcu=0.0,
+            is_emergency_vehicle=True
+        )
+        
+        # Frame 1: Initial detection -> votes = 3
+        tracks_f1 = tracker.update([amb_det])
+        assert tracks_f1[0].is_ambulance is True
+        assert tracks_f1[0].ambulance_votes >= 2
+        
+        # Frame 2: Occluded / momentary missed detection (treated as general car or lost signal)
+        car_det = Detection(
+            box=(102, 102, 202, 202),
+            label="car",
+            confidence=0.85,
+            class_id=2,
+            is_vehicle=True,
+            is_person=False,
+            is_ambulance=False,
+            pcu=1.0,
+            is_emergency_vehicle=False
+        )
+        tracks_f2 = tracker.update([car_det])
+        # Track maintains emergency state through occlusion buffer
+        assert tracks_f2[0].is_ambulance is True
+        assert tracks_f2[0].ambulance_votes > 0
+
+    def test_max_preemption_starvation_prevention_limit(self):
+        """Emergency preemption automatically disengages after 25s hard limit to prevent infinite starvation."""
+        opt = SignalOptimizer()
+        opt.trigger_emergency("South", source="visual")
+        assert opt.emergency_active is True
+        
+        # Fast-forward emergency start beyond max limit (25.0s)
+        opt.emergency_start = time.time() - 26.0
+        
+        lane_stats_empty = {
+            "North": LaneStats(name="North"),
+            "South": LaneStats(name="South"),
+            "East":  LaneStats(name="East"),
+            "West":  LaneStats(name="West"),
+        }
+        _ = opt.update(lane_stats_empty)
+        # Failsafe engaged: emergency cleared
+        assert opt.emergency_active is False
+        assert opt.emergency_lane is None
+
+    def test_emergency_track_disappearance_and_safe_clearance(self):
+        """When an emergency vehicle clears the corridor, preemption cleanly resumes normal cycling."""
+        opt = SignalOptimizer()
+        lane_stats_active = {
+            "North": LaneStats(name="North", ambulance_present=True, emergency_present=True),
+            "South": LaneStats(name="South"),
+            "East":  LaneStats(name="East"),
+            "West":  LaneStats(name="West"),
+        }
+        opt.update(lane_stats_active)
+        assert opt.emergency_active is True
+        
+        # Ambulance passes out of view
+        lane_stats_cleared = {
+            "North": LaneStats(name="North", ambulance_present=False, emergency_present=False),
+            "South": LaneStats(name="South"),
+            "East":  LaneStats(name="East"),
+            "West":  LaneStats(name="West"),
+        }
+        
+        # Hold time expires
+        opt.emergency_start = time.time() - (getattr(config, 'EMERGENCY_GREEN_HOLD', 12.0) + 1.0)
+        opt._last_amb_time = time.time() - 6.0
+        
+        opt.update(lane_stats_cleared)
+        assert opt.emergency_active is False
+

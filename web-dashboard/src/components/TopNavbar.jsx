@@ -4,6 +4,7 @@ const VIEW_TITLES = {
   'main-command-hub': { title: 'Command Hub', icon: 'dashboard' },
   'dashboard': { title: 'Command Hub', icon: 'dashboard' },
   '4-way-ai-perception': { title: 'Traffic Perception & ATSC', icon: 'traffic' },
+  'model-performance': { title: 'Model Performance & Benchmark Lab', icon: 'analytics' },
   'security-surveillance': { title: 'AI Violence & CCTV Security', icon: 'security' },
   'incidents': { title: 'Unified Incident Feed', icon: 'warning' },
   'evidence-vault': { title: 'Forensic Evidence Vault', icon: 'videocam' },

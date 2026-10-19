@@ -386,7 +386,13 @@ class VideoProcessor4Way:
                             if t.lane == top_lane and getattr(t, 'is_vehicle', False):
                                 matched_box = (t.x1, t.y1, t.x2, t.y2)
                                 break
-                    self.record_incident(top_type, top_msg, annotated, top_lane, bbox=matched_box)
+                    acc_tier = None
+                    if top_type == "accident" and hasattr(self.analyzer, 'accident_detector'):
+                        for inc in self.analyzer.accident_detector.get_active_incidents():
+                            if inc.get("lane") == top_lane:
+                                acc_tier = inc.get("state")
+                                break
+                    self.record_incident(top_type, top_msg, annotated, top_lane, bbox=matched_box, confirmation_tier=acc_tier)
                     self._last_incident_time = now
             
             if self._on_state:
@@ -434,7 +440,8 @@ class VideoProcessor4Way:
                 tracks, lane_stats, list(detections),
                 signals=self.optimizer.signals,
                 current_phase=self.optimizer.current_lane,
-                optimizer=self.optimizer
+                optimizer=self.optimizer,
+                frame=frame_to_process
             )
             
             # Pedestrian conflict evaluation
@@ -534,7 +541,7 @@ class VideoProcessor4Way:
         with self.state_lock:
             return list(self.incident_history)
 
-    def record_incident(self, inc_type: str, description: str, frame: Optional[np.ndarray] = None, lane: Optional[str] = None, bbox: Optional[Tuple[int, int, int, int]] = None):
+    def record_incident(self, inc_type: str, description: str, frame: Optional[np.ndarray] = None, lane: Optional[str] = None, bbox: Optional[Tuple[int, int, int, int]] = None, is_simulation: bool = False, confirmation_tier: Optional[str] = None):
         """Thread-safe recording of an incident with auto-cropped vehicle/incident ROI and full evidence frame."""
         now = time.time()
         with self.state_lock:
@@ -633,6 +640,7 @@ class VideoProcessor4Way:
                     cropped_b64 = ""
                     b64_frame = ""
 
+            tier = confirmation_tier or ("test/demo event" if is_simulation else ("confirmed by configured rules" if inc_type == "accident" else "confirmed"))
             incident_item = {
                 "id": f"INC_{int(now * 1000) % 100000}",
                 "type": inc_type,
@@ -644,7 +652,11 @@ class VideoProcessor4Way:
                 "cropped_image_b64": single_cam_b64, # Default to THAT camera image only (not over-zoomed)
                 "vehicle_crop_b64": cropped_b64,
                 "frame_b64": single_cam_b64,          # THAT camera image only (not 4 cameras)
-                "full_4way_b64": b64_frame            # 4-way composite
+                "full_4way_b64": b64_frame,           # 4-way composite
+                "status": "new",
+                "validation_status": tier,
+                "confirmation_tier": tier,
+                "is_simulation": is_simulation,
             }
             self.incident_history.insert(0, incident_item)
             while len(self.incident_history) > 30:
@@ -666,7 +678,7 @@ class VideoProcessor4Way:
                     timestamp=now,
                     confidence=0.90,
                     severity="critical" if inc_type in ["accident", "ambulance"] else "high" if inc_type == "crowd" else "medium",
-                    validation_status="confirmed",
+                    validation_status=tier,
                     status="new",
                     description=description,
                     snapshot_b64=single_cam_b64

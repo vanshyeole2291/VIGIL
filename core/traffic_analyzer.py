@@ -13,6 +13,7 @@ import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
+from core.accident_detector import AccidentDetector, AccidentState
 
 
 @dataclass
@@ -67,6 +68,9 @@ class TrafficAnalyzer:
         self.wait_history:    List[Dict] = []
         self.history_window   = 60  # seconds
         
+        # Multi-Tier Accident Detection Service
+        self.accident_detector = AccidentDetector()
+        
         # Accident tracking — multi-heuristic collision confirmation
         self._pending_collisions: Dict = {}            # key → {"timestamp", "lane"}
         self._accident_cooldown: float = 0.0           # Global fallback cooldown
@@ -86,7 +90,8 @@ class TrafficAnalyzer:
     def update(self, tracks, lane_stats: Dict, detections,
                signals: Optional[Dict] = None,
                current_phase: Optional[str] = None,
-               optimizer: Optional[Any] = None) -> List[Alert]:
+               optimizer: Optional[Any] = None,
+               frame: Optional[Any] = None) -> List[Alert]:
         """
         Main analysis tick.
         
@@ -152,6 +157,22 @@ class TrafficAnalyzer:
                 self._accident_cooldown = now + 3.0
                 if acc.alert_type == "accident":
                     self.total_accidents += 1
+        
+        # ── Multi-Tier Accident Detection Service ────────────────────────────
+        svc_incidents = self.accident_detector.evaluate(
+            tracks=tracks, detections=detections, lane_stats=lane_stats,
+            signals=signals, current_phase=current_phase, frame=frame
+        )
+        for inc in svc_incidents:
+            if not any(a.alert_type == "accident" and a.lane == inc.lane for a in new_alerts):
+                new_alerts.append(Alert(
+                    alert_type="accident",
+                    message=inc.description,
+                    lane=inc.lane,
+                    severity=inc.severity,
+                    bbox=inc.bbox
+                ))
+                self.total_accidents += 1
         
         # ── Illegal parking / stalled vehicle in active flow lane ────────────
         for track in vehicle_tracks:
@@ -482,6 +503,8 @@ class TrafficAnalyzer:
             "total_alerts":     len(self.alerts),
             "vehicle_types":    vehicle_types,
             "lane_stats":       lane_stats_out,
+            "accident_service": self.accident_detector.get_status(),
+            "active_accidents": self.accident_detector.get_active_incidents(),
             "lanes": {
                 name: {
                     "vehicles":   s.vehicle_count,

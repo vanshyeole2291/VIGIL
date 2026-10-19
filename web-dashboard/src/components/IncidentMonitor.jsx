@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function IncidentMonitor() {
     const [incidents, setIncidents] = useState([]);
@@ -145,6 +145,45 @@ export default function IncidentMonitor() {
             case 'crowd': return 'Crosswalk Radar & Pedestrian Safety Hold';
             default: return 'Autonomous Computer Vision Anomaly Detection';
         }
+    };
+
+    const getTierBadge = (incident) => {
+        const isSim = incident.is_simulation || (incident.description && incident.description.includes('DEMO')) || (incident.confirmation_tier === 'test/demo event');
+        if (isSim) {
+            return {
+                label: 'DEMO / TEST EVENT',
+                style: { background: 'rgba(56, 189, 248, 0.2)', border: '1px solid #38bdf8', color: '#38bdf8' }
+            };
+        }
+        const tier = (incident.confirmation_tier || incident.validation_status || '').toLowerCase();
+        if (tier.includes('fusion')) {
+            return {
+                label: 'CONFIRMED BY FUSION',
+                style: { background: 'rgba(244, 63, 94, 0.25)', border: '1px solid #f43f5e', color: '#f43f5e', boxShadow: '0 0 10px rgba(244,63,94,0.4)' }
+            };
+        }
+        if (tier.includes('visual') || tier.includes('model')) {
+            return {
+                label: 'CONFIRMED BY VISUAL MODEL',
+                style: { background: 'rgba(168, 85, 247, 0.2)', border: '1px solid #c084fc', color: '#c084fc' }
+            };
+        }
+        if (tier.includes('rule') || tier.includes('configured')) {
+            return {
+                label: 'CONFIRMED BY CONFIGURED RULES',
+                style: { background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#f87171' }
+            };
+        }
+        if (tier.includes('suspect')) {
+            return {
+                label: 'SUSPECTED ACCIDENT',
+                style: { background: 'rgba(245, 158, 11, 0.2)', border: '1px solid #f59e0b', color: '#fbbf24' }
+            };
+        }
+        return {
+            label: 'CONFIRMED BY AI',
+            style: { background: 'rgba(16, 185, 129, 0.2)', border: '1px solid #10b981', color: '#34d399' }
+        };
     };
 
     const counts = {
@@ -376,14 +415,29 @@ export default function IncidentMonitor() {
                                         </div>
                                     )}
 
-                                    {/* Module Tag Overlay */}
-                                    <div style={{
-                                        position: 'absolute', top: '10px', left: '10px',
-                                        background: incident.source_module === 'security' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(59, 130, 246, 0.85)',
-                                        color: '#fff', fontSize: '9px', fontWeight: '800', textTransform: 'uppercase',
-                                        padding: '2px 8px', borderRadius: '4px', letterSpacing: '0.5px'
-                                    }}>
-                                        {incident.source_module || 'traffic'}
+                                    {/* Module & Confirmation Tier Tag Overlay */}
+                                    <div style={{ position: 'absolute', top: '10px', left: '10px', display: 'flex', flexDirection: 'column', gap: '4px', zIndex: 5 }}>
+                                        <div style={{
+                                            background: incident.source_module === 'security' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(59, 130, 246, 0.85)',
+                                            color: '#fff', fontSize: '9px', fontWeight: '800', textTransform: 'uppercase',
+                                            padding: '2px 8px', borderRadius: '4px', letterSpacing: '0.5px', alignSelf: 'flex-start'
+                                        }}>
+                                            {incident.source_module || 'traffic'} &bull; {incident.lane || 'Approach'}
+                                        </div>
+                                        {/* Confirmation Tier Pill */}
+                                        {(() => {
+                                            const badge = getTierBadge(incident);
+                                            return (
+                                                <div style={{
+                                                    ...badge.style,
+                                                    fontSize: '8.5px', fontWeight: '800', textTransform: 'uppercase',
+                                                    padding: '2px 6px', borderRadius: '4px', letterSpacing: '0.4px',
+                                                    fontFamily: 'JetBrains Mono, monospace', alignSelf: 'flex-start'
+                                                }}>
+                                                    {badge.label}
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
 
                                     {/* Severity Tag */}
@@ -398,7 +452,7 @@ export default function IncidentMonitor() {
                                     </div>
                                 </div>
 
-                                {/* Card Footer Info Block */}
+                                {/* Card Footer Info Block with Triage Action Buttons */}
                                 <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px', background: '#090e1a' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <span style={{
@@ -411,13 +465,13 @@ export default function IncidentMonitor() {
                                         </span>
 
                                         <span style={{
-                                            background: statusVal === 'resolved' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                                            border: statusVal === 'resolved' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
+                                            background: statusVal === 'resolved' ? 'rgba(16, 185, 129, 0.2)' : statusVal === 'acknowledged' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                            border: statusVal === 'resolved' ? '1px solid rgba(16, 185, 129, 0.4)' : statusVal === 'acknowledged' ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)',
                                             padding: '2px 8px',
                                             borderRadius: '6px',
                                             fontSize: '10px',
                                             fontWeight: '800',
-                                            color: statusVal === 'resolved' ? '#10b981' : '#f59e0b',
+                                            color: statusVal === 'resolved' ? '#10b981' : statusVal === 'acknowledged' ? '#f59e0b' : '#ef4444',
                                             textTransform: 'uppercase'
                                         }}>
                                             {statusVal}
@@ -433,6 +487,40 @@ export default function IncidentMonitor() {
                                         overflowWrap: 'break-word'
                                     }}>
                                         {incident.description || 'Automatic anomaly alert captured.'}
+                                    </div>
+
+                                    {/* Inline Operator Triage Controls */}
+                                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                updateIncidentStatus(incId, 'acknowledged');
+                                            }}
+                                            disabled={statusVal === 'acknowledged' || statusVal === 'resolved'}
+                                            style={{
+                                                flex: 1, padding: '5px 8px', borderRadius: '6px',
+                                                fontSize: '10px', fontWeight: '700', cursor: 'pointer',
+                                                background: 'rgba(245, 158, 11, 0.15)', border: '1px solid #f59e0b',
+                                                color: '#fbbf24', opacity: (statusVal === 'acknowledged' || statusVal === 'resolved') ? 0.4 : 1
+                                            }}
+                                        >
+                                            ✓ Acknowledge
+                                        </button>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                updateIncidentStatus(incId, 'resolved');
+                                            }}
+                                            disabled={statusVal === 'resolved'}
+                                            style={{
+                                                flex: 1, padding: '5px 8px', borderRadius: '6px',
+                                                fontSize: '10px', fontWeight: '700', cursor: 'pointer',
+                                                background: 'rgba(16, 185, 129, 0.15)', border: '1px solid #10b981',
+                                                color: '#34d399', opacity: statusVal === 'resolved' ? 0.4 : 1
+                                            }}
+                                        >
+                                            ✓ Resolve
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -499,12 +587,26 @@ export default function IncidentMonitor() {
 
                         {/* Modal Footer with Triage Controls */}
                         <div style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                            <div>
-                                <div style={{ fontSize: '13px', fontWeight: '700', color: '#fff', marginBottom: '4px' }}>
-                                    {selectedIncident.description}
+                            <div style={{ flex: 1, minWidth: '280px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                    <div style={{ fontSize: '13px', fontWeight: '700', color: '#fff' }}>
+                                        {selectedIncident.description}
+                                    </div>
+                                    {(() => {
+                                        const badge = getTierBadge(selectedIncident);
+                                        return (
+                                            <span style={{
+                                                ...badge.style,
+                                                fontSize: '9px', fontWeight: '800', textTransform: 'uppercase',
+                                                padding: '2px 6px', borderRadius: '4px', fontFamily: 'JetBrains Mono, monospace'
+                                            }}>
+                                                {badge.label}
+                                            </span>
+                                        );
+                                    })()}
                                 </div>
                                 <div className="mono" style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
-                                    Module: {selectedIncident.source_module?.toUpperCase() || 'TRAFFIC'} &bull; Status: {selectedIncident.status?.toUpperCase() || 'NEW'} &bull; Timestamp: {new Date(selectedIncident.timestamp * 1000).toISOString()}
+                                    Module: {selectedIncident.source_module?.toUpperCase() || 'TRAFFIC'} &bull; Approach: {selectedIncident.lane || 'All'} &bull; Status: {selectedIncident.status?.toUpperCase() || 'NEW'} &bull; Timestamp: {new Date(selectedIncident.timestamp * 1000).toISOString()}
                                 </div>
                             </div>
 

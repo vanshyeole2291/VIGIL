@@ -24,6 +24,7 @@ lerna-debug.log*
 # Dependencies & Build
 node_modules/
 dist/
+!web-dashboard/dist/
 dist-ssr/
 *.local
 

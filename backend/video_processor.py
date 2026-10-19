@@ -263,7 +263,8 @@ class VideoProcessor:
                 tracks, lane_stats, list(detections),
                 signals=self.optimizer.signals,
                 current_phase=self.optimizer.current_lane,
-                optimizer=self.optimizer
+                optimizer=self.optimizer,
+                frame=frame_to_process
             )
             
             with self.state_lock:
