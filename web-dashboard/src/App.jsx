@@ -9,6 +9,12 @@ import EvidenceVaultView from './components/EvidenceVaultView';
 import CameraNetworkView from './components/CameraNetworkView';
 import SystemHealthView from './components/SystemHealthView';
 import ModelPerformanceView from './components/ModelPerformanceView';
+import EmergencyResponseView from './components/EmergencyResponseView';
+import AccidentMonitoringView from './components/AccidentMonitoringView';
+import TrafficAnalyticsView from './components/TrafficAnalyticsView';
+import DataSourcesView from './components/DataSourcesView';
+import DatabaseStorageView from './components/DatabaseStorageView';
+import SettingsView from './components/SettingsView';
 
 function App() {
   const [currentView, setCurrentView] = useState('main-command-hub');
@@ -180,6 +186,25 @@ function App() {
               />
             )}
 
+            {currentView === 'emergency-response' && (
+              <EmergencyResponseView
+                signals={state.signals}
+                emergencyActive={isEmergency}
+                onTriggerEmergency={handleTriggerEmergency}
+              />
+            )}
+
+            {currentView === 'accident-monitoring' && (
+              <AccidentMonitoringView />
+            )}
+
+            {currentView === 'traffic-analytics' && (
+              <TrafficAnalyticsView
+                metrics={state.metrics}
+                signals={state.signals}
+              />
+            )}
+
             {currentView === 'model-performance' && (
               <ModelPerformanceView />
             )}
@@ -196,8 +221,20 @@ function App() {
               <CameraNetworkView />
             )}
 
+            {currentView === 'data-sources' && (
+              <DataSourcesView />
+            )}
+
+            {currentView === 'database-storage' && (
+              <DatabaseStorageView />
+            )}
+
             {currentView === 'system-health' && (
               <SystemHealthView />
+            )}
+
+            {currentView === 'settings' && (
+              <SettingsView />
             )}
           </div>
         </main>

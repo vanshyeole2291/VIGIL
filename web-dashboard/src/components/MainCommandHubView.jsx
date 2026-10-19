@@ -92,6 +92,37 @@ export default function MainCommandHubView({
           <p className="text-[13px] text-on-surface-variant mt-1 max-w-xl leading-relaxed">
             Multi-junction perception engine with kinematic vehicle tracking, automated Webster ATSC signal cycle optimization, and Code-3 emergency vehicle preemption (EVP).
           </p>
+
+          <div className="flex flex-wrap gap-2 mt-3">
+            <button
+              onClick={() => onSwitchView && onSwitchView('incidents')}
+              className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-[11px] font-mono font-bold flex items-center gap-1 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[14px]">warning</span>
+              Incident Feed & SOPs
+            </button>
+            <button
+              onClick={() => onSwitchView && onSwitchView('emergency-response')}
+              className="px-2.5 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 text-[11px] font-mono font-bold flex items-center gap-1 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[14px]">e911_emergency</span>
+              EVP Operations
+            </button>
+            <button
+              onClick={() => onSwitchView && onSwitchView('accident-monitoring')}
+              className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-[11px] font-mono font-bold flex items-center gap-1 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[14px]">car_crash</span>
+              Collision Physics
+            </button>
+            <button
+              onClick={() => onSwitchView && onSwitchView('database-storage')}
+              className="px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-[11px] font-mono font-bold flex items-center gap-1 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[14px]">database</span>
+              DB & Storage
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-space-sm w-full md:w-auto">
