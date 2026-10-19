@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
 const VIEW_TITLES = {
-  'main-command-hub': { title: 'Live Dashboard', icon: 'dashboard' },
-  '4-way-ai-perception': { title: 'AI Perception Stream', icon: 'grid_view' },
-  'incidents': { title: 'Incident Feed', icon: 'warning' },
+  'main-command-hub': { title: 'Command Hub', icon: 'dashboard' },
+  'dashboard': { title: 'Command Hub', icon: 'dashboard' },
+  '4-way-ai-perception': { title: 'Traffic Perception & ATSC', icon: 'traffic' },
+  'security-surveillance': { title: 'AI Violence & CCTV Security', icon: 'security' },
+  'incidents': { title: 'Unified Incident Feed', icon: 'warning' },
+  'evidence-vault': { title: 'Forensic Evidence Vault', icon: 'videocam' },
+  'camera-network': { title: 'Camera Network & Feeds', icon: 'linked_camera' },
+  'system-health': { title: 'System Health & Diagnostics', icon: 'health_and_safety' },
 };
 
 export default function TopNavbar({

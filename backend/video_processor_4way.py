@@ -79,7 +79,7 @@ class VideoProcessor4Way:
         self.latest_metrics: Dict = {}
         self.latest_alerts:  List = []
         self.latest_signals: Dict = {}
-        self.incident_history: List[Dict] = self._seed_initial_incidents()
+        self.incident_history: List[Dict] = self._load_recent_incidents_from_db()
         self._last_incident_time: float = 0.0
         self._last_amb_logged: Dict[str, float] = {}
         self._on_state: Optional[Callable] = None
@@ -542,6 +542,9 @@ class VideoProcessor4Way:
                 
             b64_frame = ""
             cropped_b64 = ""
+            single_cam_b64 = ""
+            qw = getattr(self, 'frame_width', 1280) // 2
+            qh = getattr(self, 'frame_height', 720) // 2
             crop_coords = None
 
             if target_frame is not None:
@@ -638,44 +641,68 @@ class VideoProcessor4Way:
             self.incident_history.insert(0, incident_item)
             while len(self.incident_history) > 30:
                 self.incident_history.pop()
-                self.incident_history.pop()
 
-    def _seed_initial_incidents(self) -> List[Dict]:
-        now = time.time()
-        return [
-            {
-                "id": "INC_8921",
-                "type": "ambulance",
-                "lane": "North",
-                "description": "Class-1 Emergency Priority: Ambulance optical detection — arterial green wave corridor cleared.",
-                "timestamp": now - 180,
-                "frame_b64": ""
-            },
-            {
-                "id": "INC_8914",
-                "type": "crowd",
-                "lane": "East",
-                "description": "Pedestrian Crosswalk Safety: Mid-block pedestrian conflict hold — safe clearance extended (+12s).",
-                "timestamp": now - 450,
-                "frame_b64": ""
-            },
-            {
-                "id": "INC_8902",
-                "type": "parking",
-                "lane": "West",
-                "description": "Traffic Flow Obstruction: Stalled commercial vehicle flagged in West approach lane (>20s).",
-                "timestamp": now - 780,
-                "frame_b64": ""
-            },
-            {
-                "id": "INC_8890",
-                "type": "accident",
-                "lane": "South",
-                "description": "Kinematic Collision Confirmation: Two-vehicle proximity dwell resolved without sustained impact.",
-                "timestamp": now - 1200,
-                "frame_b64": ""
-            }
-        ]
+            # Persist to VIGIL SQLite database
+            try:
+                from backend.database import SessionLocal
+                import backend.models.db_models as db_models
+                db = SessionLocal()
+                cam_map = {"North": "CAM_NORTH_01", "South": "CAM_SOUTH_01", "East": "CAM_EAST_01", "West": "CAM_WEST_01"}
+                camera_id = cam_map.get(lane, "CAM_NORTH_01")
+                db_inc = db_models.Incident(
+                    id=incident_item["id"],
+                    incident_type=inc_type,
+                    source_module="traffic",
+                    camera_id=camera_id,
+                    lane=lane or "Approach",
+                    timestamp=now,
+                    confidence=0.90,
+                    severity="critical" if inc_type in ["accident", "ambulance"] else "high" if inc_type == "crowd" else "medium",
+                    validation_status="confirmed",
+                    status="new",
+                    description=description,
+                    snapshot_b64=single_cam_b64
+                )
+                db.merge(db_inc)
+                db_alert = db_models.Alert(
+                    incident_id=incident_item["id"],
+                    alert_type=inc_type,
+                    source_module="traffic",
+                    severity=db_inc.severity,
+                    message=description,
+                    lane=lane or "Approach",
+                    acknowledged=False
+                )
+                db.add(db_alert)
+                db.commit()
+                db.close()
+            except Exception as e:
+                print(f"[Database] Error persisting incident {incident_item['id']}: {e}")
+
+    def _load_recent_incidents_from_db(self) -> List[Dict]:
+        """Loads real persisted incidents from the VIGIL database instead of mock data."""
+        try:
+            from backend.database import SessionLocal
+            import backend.models.db_models as db_models
+            db = SessionLocal()
+            records = db.query(db_models.Incident).order_by(db_models.Incident.timestamp.desc()).limit(30).all()
+            items = []
+            for r in records:
+                items.append({
+                    "id": r.id,
+                    "type": r.incident_type,
+                    "lane": r.lane or "Approach",
+                    "description": r.description,
+                    "timestamp": r.timestamp,
+                    "frame_b64": r.snapshot_b64 or "",
+                    "camera_frame_b64": r.snapshot_b64 or "",
+                    "cropped_image_b64": r.snapshot_b64 or ""
+                })
+            db.close()
+            return items
+        except Exception as e:
+            print(f"[Database] Could not load persisted incidents: {e}")
+            return []
 
     def set_quadrant_mapping(self, mapping: List[int]):
         if len(mapping) == 4:

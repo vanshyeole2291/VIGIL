@@ -9,10 +9,13 @@ export default function Sidebar({
   onToggleCollapse,
 }) {
   const navItems = [
-    { id: 'main-command-hub', label: 'Dashboard', icon: 'dashboard' },
-    { id: '4-way-ai-perception', label: 'AI Perception', icon: 'grid_view' },
-    { id: 'incidents', label: 'Incidents', icon: 'warning' },
-
+    { id: 'main-command-hub', label: 'Command Hub', icon: 'dashboard' },
+    { id: '4-way-ai-perception', label: 'Traffic Perception', icon: 'traffic' },
+    { id: 'security-surveillance', label: 'Violence & Security', icon: 'security' },
+    { id: 'incidents', label: 'Incident Archive', icon: 'warning' },
+    { id: 'evidence-vault', label: 'Evidence Vault', icon: 'videocam' },
+    { id: 'camera-network', label: 'Camera Network', icon: 'linked_camera' },
+    { id: 'system-health', label: 'System Health', icon: 'health_and_safety' },
   ];
 
   return (
@@ -31,15 +34,15 @@ export default function Sidebar({
         <div className="h-16 px-space-md flex items-center justify-between border-b border-outline-variant/20 bg-surface-container-low/60 overflow-hidden">
           <div className="flex items-center gap-space-sm min-w-0">
             <div className="w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center shadow-inner shrink-0">
-              <span className="material-symbols-outlined text-primary text-[20px]">traffic</span>
+              <span className="material-symbols-outlined text-primary text-[20px]">shield</span>
             </div>
             {!collapsed && (
               <div className="truncate">
-                <span className="font-headline text-[13px] font-bold tracking-wider uppercase text-primary block leading-none truncate">
-                  AI Based Traffic
+                <span className="font-headline text-[15px] font-extrabold tracking-wider uppercase text-primary block leading-none truncate">
+                  VIGIL
                 </span>
-                <span className="font-mono text-[10px] text-on-surface-variant block mt-1 tracking-tight truncate">
-                  SURVEILLANCE SYSTEM
+                <span className="font-mono text-[9px] text-on-surface-variant block mt-1 tracking-tight truncate">
+                  AI SURVEILLANCE & SAFETY
                 </span>
               </div>
             )}

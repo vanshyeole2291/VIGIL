@@ -35,7 +35,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    print("\n" + "="*60 + "\n   AI Traffic De-Congestion System - 4-Way Web Dashboard\n" + "="*60)
+    print("\n" + "="*65 + "\n   VIGIL — AI Surveillance & Traffic Safety Command Center\n" + "="*65)
     
     if not args.no_browser: open_browser(args.port)
     

@@ -24,9 +24,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from backend.video_processor_4way import VideoProcessor4Way
 from core.traffic_analyzer import Alert
+from backend.database import init_db
+from backend.routers.vigil_api import router as vigil_router, violence_detector
 
-app = FastAPI(title="DevDominators — AI Traffic 4-Way ATSC Platform", version="2.0.0")
+app = FastAPI(
+    title="VIGIL — AI-Based Intelligent Surveillance & Traffic Safety System",
+    description="Unified Edge ATSC Traffic Optimization and Video Action Security Surveillance",
+    version="2.0.0"
+)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Mount unified VIGIL REST API router (Auth, Cameras, Violence, Incidents, Alerts, Evidence, Health)
+app.include_router(vigil_router, prefix="/api")
 
 processor: Optional[VideoProcessor4Way] = None
 client_queues: Dict[WebSocket, asyncio.Queue] = {}
@@ -41,6 +50,12 @@ def init_processor(v_north="assets/videos/north.mp4", v_south="assets/videos/sou
 @app.on_event("startup")
 async def startup():
     global main_event_loop
+    # Initialize SQLite database schema and seed defaults
+    try:
+        init_db()
+    except Exception as e:
+        print(f"[VIGIL Database] Init error: {e}")
+
     main_event_loop = asyncio.get_event_loop()
     
     def on_state(state: dict):
@@ -186,7 +201,35 @@ async def api_metrics():
 
 @app.get("/api/incidents")
 async def api_incidents():
-    """Returns captured incident snapshots (Accident, Ambulance, Crowd, Stalls)."""
+    """Returns captured incident snapshots from database & processor (Accident, Violence, Ambulance, Stalls)."""
+    from backend.database import SessionLocal
+    import backend.models.db_models as db_models
+    try:
+        db = SessionLocal()
+        records = db.query(db_models.Incident).order_by(db_models.Incident.timestamp.desc()).limit(50).all()
+        if records:
+            res = []
+            for inc in records:
+                res.append({
+                    "id": inc.id,
+                    "type": inc.incident_type,
+                    "incident_type": inc.incident_type,
+                    "source_module": inc.source_module,
+                    "description": inc.description,
+                    "lane": inc.lane,
+                    "timestamp": inc.timestamp,
+                    "frame_b64": inc.snapshot_b64,
+                    "severity": inc.severity,
+                    "status": inc.status,
+                    "validation_status": inc.validation_status,
+                    "evidence_id": inc.evidence_id,
+                })
+            db.close()
+            return JSONResponse(res)
+        db.close()
+    except Exception:
+        pass
+
     if processor:
         return JSONResponse(processor.get_incident_history())
     return JSONResponse([])
@@ -582,12 +625,21 @@ async def api_simulate_incident(req: SimulateIncidentRequest):
 
 @app.post("/api/clear-incidents")
 async def api_clear_incidents():
-    """Clear recorded incident log."""
+    """Clear recorded incident log in memory and database."""
     if processor and hasattr(processor, "incident_history"):
         with processor.state_lock:
             processor.incident_history.clear()
-        return {"status": "cleared"}
-    raise HTTPException(status_code=503, detail="Processor offline")
+    from backend.database import SessionLocal
+    import backend.models.db_models as db_models
+    try:
+        db = SessionLocal()
+        db.query(db_models.Incident).delete()
+        db.query(db_models.Alert).delete()
+        db.commit()
+        db.close()
+    except Exception:
+        pass
+    return {"status": "cleared"}
 
 
 @app.post("/api/open-live-camera")

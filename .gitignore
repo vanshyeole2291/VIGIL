@@ -53,4 +53,10 @@ best/
 .mempalace/
 scratch_*.jpg
 
+# Local database & evidence
+*.db
+*.sqlite3
+evidence/videos/*
+!evidence/videos/.gitkeep
+
 

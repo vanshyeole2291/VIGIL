@@ -4,6 +4,10 @@ import TopNavbar from './components/TopNavbar';
 import MainCommandHubView from './components/MainCommandHubView';
 import FourWayPerceptionView from './components/FourWayPerceptionView';
 import IncidentMonitor from './components/IncidentMonitor';
+import SecuritySurveillanceView from './components/SecuritySurveillanceView';
+import EvidenceVaultView from './components/EvidenceVaultView';
+import CameraNetworkView from './components/CameraNetworkView';
+import SystemHealthView from './components/SystemHealthView';
 
 function App() {
   const [currentView, setCurrentView] = useState('main-command-hub');
@@ -173,6 +177,22 @@ function App() {
                 signals={state.signals}
                 emergencyActive={isEmergency}
               />
+            )}
+
+            {currentView === 'security-surveillance' && (
+              <SecuritySurveillanceView />
+            )}
+
+            {currentView === 'evidence-vault' && (
+              <EvidenceVaultView />
+            )}
+
+            {currentView === 'camera-network' && (
+              <CameraNetworkView />
+            )}
+
+            {currentView === 'system-health' && (
+              <SystemHealthView />
             )}
           </div>
         </main>

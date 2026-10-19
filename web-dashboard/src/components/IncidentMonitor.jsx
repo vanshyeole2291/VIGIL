@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 
 export default function IncidentMonitor() {
     const [incidents, setIncidents] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('all'); // all, accident, ambulance, crowd, parking
+    const [filter, setFilter] = useState('all'); // all, accident, ambulance, crowd, parking, violence
     const [selectedIncident, setSelectedIncident] = useState(null);
     const [selectedLane, setSelectedLane] = useState('North');
     const [actionMsg, setActionMsg] = useState('');
@@ -25,7 +25,7 @@ export default function IncidentMonitor() {
 
     useEffect(() => {
         fetchIncidents();
-        const interval = setInterval(fetchIncidents, 2000);
+        const interval = setInterval(fetchIncidents, 2500);
         return () => clearInterval(interval);
     }, []);
 
@@ -56,8 +56,50 @@ export default function IncidentMonitor() {
         }
     };
 
+    const triggerSecuritySimulation = async () => {
+        setSimulating(true);
+        try {
+            const res = await fetch('/api/violence/test-event', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    camera_id: 'CAM_SEC_01',
+                    description: 'Security Operator Demonstration: Simulated physical altercation scenario.',
+                    severity: 'critical'
+                })
+            });
+            if (res.ok) {
+                showMsg('🛡️ Security Altercation incident logged & MP4 evidence clipped!');
+                await fetchIncidents();
+            }
+        } catch (e) {
+            showMsg(`Security simulation failed: ${e.message}`);
+        } finally {
+            setSimulating(false);
+        }
+    };
+
+    const updateIncidentStatus = async (incidentId, newStatus) => {
+        try {
+            const res = await fetch(`/api/incidents/${incidentId}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
+            if (res.ok) {
+                showMsg(`✓ Incident ${incidentId} marked as ${newStatus.toUpperCase()}`);
+                if (selectedIncident && selectedIncident.id === incidentId) {
+                    setSelectedIncident({ ...selectedIncident, status: newStatus });
+                }
+                await fetchIncidents();
+            }
+        } catch (e) {
+            showMsg(`Failed to update status: ${e.message}`);
+        }
+    };
+
     const clearHistory = async () => {
-        if (!window.confirm("Clear all recorded incident evidence logs?")) return;
+        if (!window.confirm("Clear all recorded incident evidence logs in memory and database?")) return;
         try {
             const res = await fetch('/api/clear-incidents', { method: 'POST' });
             if (res.ok) {
@@ -70,7 +112,9 @@ export default function IncidentMonitor() {
     };
 
     const getTypeColor = (type) => {
-        switch (type) {
+        const t = (type || '').toLowerCase();
+        if (t.includes('violence')) return '#f43f5e';
+        switch (t) {
             case 'crowd': return 'var(--blue)';
             case 'ambulance': return 'var(--purple)';
             case 'accident': return 'var(--red)';
@@ -80,7 +124,9 @@ export default function IncidentMonitor() {
     };
 
     const getIcon = (type) => {
-        switch (type) {
+        const t = (type || '').toLowerCase();
+        if (t.includes('violence')) return '🛡️';
+        switch (t) {
             case 'crowd': return '👥';
             case 'ambulance': return '🚑';
             case 'accident': return '💥';
@@ -90,7 +136,9 @@ export default function IncidentMonitor() {
     };
 
     const getMethodology = (type) => {
-        switch (type) {
+        const t = (type || '').toLowerCase();
+        if (t.includes('violence')) return '16-Frame Temporal Sequence & MobileNetV2-BiLSTM Graph';
+        switch (t) {
             case 'accident': return 'Kinematic IoU Overlap & Two-Phase Dwell Impact';
             case 'ambulance': return 'Optical HSV Multi-Spectral & Acoustic FFT Preemption';
             case 'parking': return 'Stationary Dwell Delay Threshold (>15s)';
@@ -101,15 +149,18 @@ export default function IncidentMonitor() {
 
     const counts = {
         all: incidents.length,
-        accident: incidents.filter(i => i.type === 'accident').length,
-        ambulance: incidents.filter(i => i.type === 'ambulance').length,
-        parking: incidents.filter(i => i.type === 'parking').length,
-        crowd: incidents.filter(i => i.type === 'crowd').length,
+        accident: incidents.filter(i => (i.type || i.incident_type) === 'accident').length,
+        ambulance: incidents.filter(i => (i.type || i.incident_type) === 'ambulance').length,
+        parking: incidents.filter(i => (i.type || i.incident_type) === 'parking').length,
+        crowd: incidents.filter(i => (i.type || i.incident_type) === 'crowd').length,
+        violence: incidents.filter(i => (i.type || i.incident_type || '').includes('violence')).length,
     };
 
     const filtered = incidents.filter(inc => {
         if (filter === 'all') return true;
-        return inc.type === filter;
+        const incType = (inc.type || inc.incident_type || '').toLowerCase();
+        if (filter === 'violence') return incType.includes('violence');
+        return incType === filter;
     });
 
     return (
@@ -126,19 +177,20 @@ export default function IncidentMonitor() {
                     </div>
                     <div>
                         <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#fff', margin: 0, letterSpacing: '-0.3px' }}>
-                            Tactical Incident Feed & Security Anomaly Archive
+                            VIGIL Unified Incident Command & Forensic Archive
                         </h2>
                         <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                            Two-phase kinematic collision verification &bull; High-res base64 forensic evidence capture
+                            Traffic Kinematic Collision Analysis &bull; AI Security Altercation Detection &bull; SQLite Persistence
                         </p>
                     </div>
                 </div>
 
                 {/* Filter Tabs with Dynamic Counts */}
-                <div style={{ display: 'flex', gap: '6px', background: 'rgba(15, 23, 42, 0.6)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <div style={{ display: 'flex', gap: '6px', background: 'rgba(15, 23, 42, 0.6)', padding: '3px', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.08)', flexWrap: 'wrap' }}>
                     {[
                         { id: 'all', label: 'All', icon: '📋', count: counts.all },
                         { id: 'accident', label: 'Accidents', icon: '💥', count: counts.accident },
+                        { id: 'violence', label: 'Security Altercations', icon: '🛡️', count: counts.violence },
                         { id: 'ambulance', label: 'Ambulances', icon: '🚑', count: counts.ambulance },
                         { id: 'parking', label: 'Stalls (>15s)', icon: '🛑', count: counts.parking },
                         { id: 'crowd', label: 'Pedestrians', icon: '👥', count: counts.crowd },
@@ -196,6 +248,13 @@ export default function IncidentMonitor() {
                         💥 Simulate Crash
                     </button>
                     <button
+                        onClick={triggerSecuritySimulation}
+                        disabled={simulating}
+                        className="tactical-btn"
+                        style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid #ef4444', color: '#f87171', fontSize: '11px', padding: '6px 10px' }}>
+                        🛡️ Simulate Security Altercation
+                    </button>
+                    <button
                         onClick={() => triggerSimulation('ambulance')}
                         disabled={simulating}
                         className="tactical-btn"
@@ -245,7 +304,7 @@ export default function IncidentMonitor() {
             {/* Main Content Area */}
             {loading && incidents.length === 0 ? (
                 <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '60px' }}>
-                    Loading incident repository...
+                    Loading incident repository from SQLite...
                 </div>
             ) : filtered.length === 0 ? (
                 <div className="glass-panel" style={{ textAlign: 'center', padding: '50px 24px', borderRadius: '16px' }}>
@@ -256,20 +315,6 @@ export default function IncidentMonitor() {
                     <p style={{ color: 'var(--text-muted)', fontSize: '12px', maxWidth: '480px', margin: '0 auto 16px auto' }}>
                         No anomalies matching this filter. You can inject on-demand test scenarios above to immediately verify incident capture and evidence logging.
                     </p>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
-                        <button
-                            onClick={() => triggerSimulation('accident')}
-                            className="tactical-btn tactical-btn-primary"
-                            style={{ fontSize: '12px', padding: '8px 14px' }}>
-                            💥 Inject Test Crash Event
-                        </button>
-                        <button
-                            onClick={() => triggerSimulation('ambulance')}
-                            className="tactical-btn"
-                            style={{ fontSize: '12px', padding: '8px 14px', border: '1px solid var(--purple)', color: '#c084fc' }}>
-                            🚑 Inject Test Ambulance Priority
-                        </button>
-                    </div>
                 </div>
             ) : (
                 <div style={{
@@ -277,98 +322,122 @@ export default function IncidentMonitor() {
                     gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
                     gap: '16px'
                 }}>
-                    {filtered.map((incident, idx) => (
-                        <div
-                            key={idx}
-                            onClick={() => setSelectedIncident(incident)}
-                            style={{
-                                background: '#090e1a',
-                                borderRadius: '10px',
-                                border: '1px solid rgba(255, 255, 255, 0.08)',
-                                overflow: 'hidden',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
-                                cursor: 'pointer',
-                                transition: 'transform 0.15s ease, border-color 0.15s ease'
-                            }}
-                            onMouseEnter={e => {
-                                e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.4)';
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                            }}
-                            onMouseLeave={e => {
-                                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-                                e.currentTarget.style.transform = 'translateY(0)';
-                            }}
-                        >
-                            {/* Snapshot Image Container */}
-                            <div style={{ position: 'relative', width: '100%', height: '215px', background: '#020617', overflow: 'hidden' }}>
-                                {incident.frame_b64 ? (
-                                    <img
-                                        src={`data:image/jpeg;base64,${incident.frame_b64}`}
-                                        alt="Incident Snapshot"
-                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                    />
-                                ) : (
+                    {filtered.map((incident, idx) => {
+                        const incType = incident.type || incident.incident_type || 'incident';
+                        const incId = incident.id || `INC_${idx}`;
+                        const statusVal = incident.status || 'new';
+
+                        return (
+                            <div
+                                key={idx}
+                                onClick={() => setSelectedIncident(incident)}
+                                style={{
+                                    background: '#090e1a',
+                                    borderRadius: '10px',
+                                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                                    overflow: 'hidden',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)',
+                                    cursor: 'pointer',
+                                    transition: 'transform 0.15s ease, border-color 0.15s ease'
+                                }}
+                                onMouseEnter={e => {
+                                    e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                }}
+                                onMouseLeave={e => {
+                                    e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                            >
+                                {/* Snapshot Image Container */}
+                                <div style={{ position: 'relative', width: '100%', height: '215px', background: '#020617', overflow: 'hidden' }}>
+                                    {incident.frame_b64 ? (
+                                        <img
+                                            src={`data:image/jpeg;base64,${incident.frame_b64}`}
+                                            alt="Incident Snapshot"
+                                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                        />
+                                    ) : (
+                                        <div style={{
+                                            display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center',
+                                            flexDirection: 'column', color: '#64748b', background: '#040814'
+                                        }}>
+                                            <span style={{ fontSize: '38px', marginBottom: '6px' }}>{getIcon(incType)}</span>
+                                            <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>
+                                                {incType.toUpperCase()} EVENT
+                                            </span>
+                                            {incident.evidence_id && (
+                                                <span style={{ fontSize: '10px', color: '#38bdf8', marginTop: '4px' }}>
+                                                    📹 MP4 Clip Available in Vault
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Module Tag Overlay */}
                                     <div style={{
-                                        display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center',
-                                        flexDirection: 'column', color: '#64748b', background: '#040814'
+                                        position: 'absolute', top: '10px', left: '10px',
+                                        background: incident.source_module === 'security' ? 'rgba(239, 68, 68, 0.85)' : 'rgba(59, 130, 246, 0.85)',
+                                        color: '#fff', fontSize: '9px', fontWeight: '800', textTransform: 'uppercase',
+                                        padding: '2px 8px', borderRadius: '4px', letterSpacing: '0.5px'
                                     }}>
-                                        <span style={{ fontSize: '32px', marginBottom: '6px' }}>{getIcon(incident.type)}</span>
-                                        <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700' }}>
-                                            FORENSIC RECORD
+                                        {incident.source_module || 'traffic'}
+                                    </div>
+
+                                    {/* Severity Tag */}
+                                    <div style={{
+                                        position: 'absolute', top: '10px', right: '10px',
+                                        background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.2)',
+                                        color: incident.severity === 'critical' ? '#f43f5e' : '#fbbf24',
+                                        fontSize: '9px', fontWeight: '800', textTransform: 'uppercase',
+                                        padding: '2px 6px', borderRadius: '4px'
+                                    }}>
+                                        {incident.severity || 'high'}
+                                    </div>
+                                </div>
+
+                                {/* Card Footer Info Block */}
+                                <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px', background: '#090e1a' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{
+                                            fontSize: '11px',
+                                            color: '#94a3b8',
+                                            fontFamily: 'JetBrains Mono, monospace',
+                                            fontWeight: '500'
+                                        }}>
+                                            {new Date(incident.timestamp * 1000).toLocaleTimeString()} &bull; {incId}
+                                        </span>
+
+                                        <span style={{
+                                            background: statusVal === 'resolved' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                                            border: statusVal === 'resolved' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
+                                            padding: '2px 8px',
+                                            borderRadius: '6px',
+                                            fontSize: '10px',
+                                            fontWeight: '800',
+                                            color: statusVal === 'resolved' ? '#10b981' : '#f59e0b',
+                                            textTransform: 'uppercase'
+                                        }}>
+                                            {statusVal}
                                         </span>
                                     </div>
-                                )}
-                            </div>
 
-                            {/* Card Footer Info Block matching screenshot */}
-                            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px', background: '#090e1a' }}>
-                                {/* Row 1: Timestamp & Camera Indicator */}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span style={{
-                                        fontSize: '11px',
-                                        color: '#94a3b8',
-                                        fontFamily: 'JetBrains Mono, monospace',
-                                        fontWeight: '500'
+                                    <div style={{
+                                        fontSize: '13px',
+                                        color: '#f8fafc',
+                                        fontWeight: '500',
+                                        lineHeight: 1.45,
+                                        wordBreak: 'break-word',
+                                        overflowWrap: 'break-word'
                                     }}>
-                                        {new Date(incident.timestamp * 1000).toLocaleString('en-GB', {
-                                            day: 'numeric', month: 'numeric', year: 'numeric',
-                                            hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true
-                                        })}
-                                    </span>
-
-                                    <span style={{
-                                        background: 'rgba(15, 23, 42, 0.85)',
-                                        border: '1px solid rgba(255, 255, 255, 0.15)',
-                                        padding: '2px 8px',
-                                        borderRadius: '6px',
-                                        fontSize: '10px',
-                                        fontWeight: '800',
-                                        color: '#e2e8f0',
-                                        letterSpacing: '0.5px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '4px'
-                                    }}>
-                                        📹 {incident.lane ? incident.lane.toUpperCase() : 'NORTH'} CAM
-                                    </span>
-                                </div>
-
-                                {/* Row 2: Incident Citation Description */}
-                                <div style={{
-                                    fontSize: '13px',
-                                    color: '#f8fafc',
-                                    fontWeight: '500',
-                                    lineHeight: 1.45,
-                                    wordBreak: 'break-word',
-                                    overflowWrap: 'break-word'
-                                }}>
-                                    {incident.description || 'Automatic anomaly alert captured.'}
+                                        {incident.description || 'Automatic anomaly alert captured.'}
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
 
@@ -388,10 +457,10 @@ export default function IncidentMonitor() {
                         {/* Modal Header */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid rgba(255, 255, 255, 0.08)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <span style={{ fontSize: '20px' }}>{getIcon(selectedIncident.type)}</span>
+                                <span style={{ fontSize: '20px' }}>{getIcon(selectedIncident.type || selectedIncident.incident_type)}</span>
                                 <div>
-                                    <span style={{ fontWeight: '800', fontSize: '14px', textTransform: 'uppercase', color: getTypeColor(selectedIncident.type) }}>
-                                        {selectedIncident.type} Forensic Evidence Snapshot
+                                    <span style={{ fontWeight: '800', fontSize: '14px', textTransform: 'uppercase', color: getTypeColor(selectedIncident.type || selectedIncident.incident_type) }}>
+                                        {selectedIncident.type || selectedIncident.incident_type} Incident Details
                                     </span>
                                     <span className="mono" style={{ fontSize: '11px', color: 'var(--text-dim)', marginLeft: '10px' }}>
                                         [{selectedIncident.id || `INC_${Math.floor(selectedIncident.timestamp % 10000)}`}]
@@ -417,33 +486,54 @@ export default function IncidentMonitor() {
                                 />
                             ) : (
                                 <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                    <div style={{ fontSize: '40px', marginBottom: '10px' }}>{getIcon(selectedIncident.type)}</div>
-                                    <p style={{ margin: 0, fontSize: '13px' }}>Digital event telemetry captured without attached visual keyframe.</p>
+                                    <div style={{ fontSize: '40px', marginBottom: '10px' }}>{getIcon(selectedIncident.type || selectedIncident.incident_type)}</div>
+                                    <p style={{ margin: 0, fontSize: '13px' }}>Digital event telemetry captured with automated evidence record.</p>
+                                    {selectedIncident.evidence_id && (
+                                        <p style={{ fontSize: '11px', color: '#38bdf8', marginTop: '6px' }}>
+                                            Evidence File: {selectedIncident.evidence_id} (Stored in Evidence Vault)
+                                        </p>
+                                    )}
                                 </div>
                             )}
                         </div>
 
-                        {/* Modal Footer */}
+                        {/* Modal Footer with Triage Controls */}
                         <div style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                             <div>
                                 <div style={{ fontSize: '13px', fontWeight: '700', color: '#fff', marginBottom: '4px' }}>
                                     {selectedIncident.description}
                                 </div>
                                 <div className="mono" style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
-                                    Approach: {selectedIncident.lane || 'Intersection'} &bull; Verification: {getMethodology(selectedIncident.type)} &bull; Timestamp: {new Date(selectedIncident.timestamp * 1000).toISOString()}
+                                    Module: {selectedIncident.source_module?.toUpperCase() || 'TRAFFIC'} &bull; Status: {selectedIncident.status?.toUpperCase() || 'NEW'} &bull; Timestamp: {new Date(selectedIncident.timestamp * 1000).toISOString()}
                                 </div>
                             </div>
 
-                            {selectedIncident.frame_b64 && (
-                                <a
-                                    href={`data:image/jpeg;base64,${selectedIncident.frame_b64}`}
-                                    download={`incident_evidence_${selectedIncident.type}_${Date.now()}.jpg`}
-                                    className="tactical-btn tactical-btn-primary"
-                                    style={{ textDecoration: 'none', padding: '8px 16px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <button
+                                    onClick={() => updateIncidentStatus(selectedIncident.id, 'acknowledged')}
+                                    className="tactical-btn"
+                                    style={{ padding: '6px 12px', fontSize: '11px', background: 'rgba(245, 158, 11, 0.2)', border: '1px solid #f59e0b', color: '#fbbf24' }}
                                 >
-                                    💾 Export High-Res Snapshot
-                                </a>
-                            )}
+                                    ✓ Acknowledge
+                                </button>
+                                <button
+                                    onClick={() => updateIncidentStatus(selectedIncident.id, 'resolved')}
+                                    className="tactical-btn"
+                                    style={{ padding: '6px 12px', fontSize: '11px', background: 'rgba(16, 185, 129, 0.2)', border: '1px solid #10b981', color: '#34d399' }}
+                                >
+                                    ✓ Resolve
+                                </button>
+                                {selectedIncident.frame_b64 && (
+                                    <a
+                                        href={`data:image/jpeg;base64,${selectedIncident.frame_b64}`}
+                                        download={`incident_evidence_${selectedIncident.type}_${Date.now()}.jpg`}
+                                        className="tactical-btn tactical-btn-primary"
+                                        style={{ textDecoration: 'none', padding: '6px 12px', fontSize: '11px' }}
+                                    >
+                                        💾 Export Snapshot
+                                    </a>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
