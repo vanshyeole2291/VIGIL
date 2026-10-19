@@ -350,18 +350,20 @@ class VideoProcessor4Way:
                         ranked_candidates.append((5, "parking", a_msg, a_lane, a_box))
 
                 # Priority 2: Physical Emergency Vehicle Presence (debounced per approach)
-                amb_tracks = [t for t in current_tracks if getattr(t, 'is_ambulance', False)]
-                if amb_tracks:
-                    lead_amb = amb_tracks[0]
-                    amb_lane = lead_amb.lane or self.optimizer.emergency_lane or "West"
-                    if now > self._last_amb_logged.get(amb_lane, 0.0):
-                        amb_box = (lead_amb.x1, lead_amb.y1, lead_amb.x2, lead_amb.y2)
-                        ranked_candidates.append((7, "ambulance", f"Class-1 Emergency Priority: Ambulance active in {amb_lane} corridor.", amb_lane, amb_box))
-                        self._last_amb_logged[amb_lane] = now + 25.0
+                em_tracks = [t for t in current_tracks if getattr(t, 'is_emergency_vehicle', False) or getattr(t, 'is_ambulance', False) or getattr(t, 'is_fire_truck', False)]
+                if em_tracks:
+                    lead_em = em_tracks[0]
+                    is_ft = getattr(lead_em, 'is_fire_truck', False) or lead_em.label in ["fire_truck", "firetruck"]
+                    em_type = "Fire Truck" if is_ft else "Ambulance"
+                    em_lane = lead_em.lane or self.optimizer.emergency_lane or "West"
+                    if now > self._last_amb_logged.get(em_lane, 0.0):
+                        em_box = (lead_em.x1, lead_em.y1, lead_em.x2, lead_em.y2)
+                        ranked_candidates.append((7, "ambulance", f"Class-1 Emergency Priority: {em_type} active in {em_lane} corridor.", em_lane, em_box))
+                        self._last_amb_logged[em_lane] = now + 25.0
                 elif self.optimizer.emergency_active and getattr(self.optimizer, 'emergency_source', '') == "audio":
                     em_lane = self.optimizer.emergency_lane or "Corridor"
                     if now > self._last_amb_logged.get("audio", 0.0):
-                        ranked_candidates.append((6, "ambulance", f"Acoustic Siren Preemption: Emergency vehicle approaching {em_lane}.", em_lane, None))
+                        ranked_candidates.append((6, "ambulance", f"Acoustic Siren Preemption (Fallback): Emergency vehicle approaching {em_lane}.", em_lane, None))
                         self._last_amb_logged["audio"] = now + 25.0
 
                 # Priority 3: Check for Stalled Queues (wait time >= ILLEGAL_PARKING_TIME)
@@ -423,8 +425,11 @@ class VideoProcessor4Way:
                 
             lane_stats = self.lane_mgr.update(tracks)
             
+            siren_active = False
+            if hasattr(self, 'audio_detector') and self.audio_detector:
+                siren_active = getattr(self.audio_detector, 'siren_detected', False) or self.audio_detector.get_status().get("siren_active", False)
             self.optimizer.update_phase_duration(lane_stats)
-            self.optimizer.update(lane_stats)
+            self.optimizer.update(lane_stats, has_audio_siren=siren_active, audio_lane=self.optimizer.current_lane)
             self.analyzer.update(
                 tracks, lane_stats, list(detections),
                 signals=self.optimizer.signals,
@@ -492,6 +497,8 @@ class VideoProcessor4Way:
                 "ground_y_m": round(gy, 2),
                 "speed_kmh": round(getattr(t, 'speed_kmh', 0.0), 1),
                 "is_ambulance": getattr(t, 'is_ambulance', False),
+                "is_fire_truck": getattr(t, 'is_fire_truck', False),
+                "is_emergency_vehicle": getattr(t, 'is_emergency_vehicle', False) or getattr(t, 'is_ambulance', False) or getattr(t, 'is_fire_truck', False),
                 "pcu": getattr(t, 'pcu', 1.0),
                 "length_m": dims.get("length_m", 4.6),
                 "width_m": dims.get("width_m", 1.8),

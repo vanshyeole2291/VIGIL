@@ -28,7 +28,8 @@ class Detection:
     
     def __init__(self, box: Tuple[int, int, int, int], label: str, confidence: float,
                  class_id: int, is_vehicle: bool, is_person: bool, is_ambulance: bool,
-                 pcu: float = 1.0, has_emergency_lights: bool = False):
+                 pcu: float = 1.0, has_emergency_lights: bool = False,
+                 is_fire_truck: bool = False, is_emergency_vehicle: bool = False):
         self.x1, self.y1, self.x2, self.y2 = box
         self.label       = label
         self.confidence  = confidence
@@ -36,6 +37,8 @@ class Detection:
         self.is_vehicle  = is_vehicle
         self.is_person   = is_person
         self.is_ambulance = is_ambulance
+        self.is_fire_truck = is_fire_truck
+        self.is_emergency_vehicle = is_emergency_vehicle or is_ambulance or is_fire_truck
         self.pcu         = pcu
         self.has_emergency_lights = has_emergency_lights
         
@@ -75,6 +78,8 @@ class Detector:
         "bicycle":    (255, 220, 0  ),   # Cyan
         "person":     (0,   255, 255),   # Neon Yellow
         "ambulance":  (0,   0,   255),   # Emergency Signal Red
+        "fire_truck": (0,   69,  255),   # Fire Rescue Red-Orange
+        "firetruck":  (0,   69,  255),
         "default":    (200, 200, 200),
     }
     
@@ -126,7 +131,7 @@ class Detector:
         # Dynamic class label mapping (model-agnostic: supports 6-class custom & 80-class COCO)
         self.VEHICLE_LABELS = {
             "car", "motorcycle", "bus", "truck", "bicycle", "van", "suv",
-            "auto", "vehicle", "ambulance"
+            "auto", "vehicle", "ambulance", "fire_truck", "firetruck"
         }
         self.PERSON_LABELS = {"person", "pedestrian", "crowd"}
         
@@ -136,7 +141,7 @@ class Detector:
         
         self._pcu_weights = getattr(config, 'PCU_WEIGHTS', {
             "car": 1.0, "motorcycle": 0.5, "bus": 3.0, "truck": 3.0,
-            "bicycle": 0.2, "person": 0.1, "ambulance": 0.0
+            "bicycle": 0.2, "person": 0.1, "ambulance": 0.0, "fire_truck": 0.0, "firetruck": 0.0
         })
         self.active_model_label = next((m["label"] for m in self.AVAILABLE_MODELS if m["id"] == self.model_name), self.model_name)
         
@@ -208,15 +213,21 @@ class Detector:
             
             # True ambulance prediction: verified by trained neural weights (class 80 or ambulance label)
             amb_conf_thresh = getattr(config, 'AMBULANCE_CONFIDENCE_THRESHOLD', 0.50)
-            is_ambulance_pred = ((cls_id == 80 or label == "ambulance") or any(kw in label for kw in config.AMBULANCE_CLASS_KEYWORDS)) and (conf >= amb_conf_thresh)
+            is_ambulance_pred = ((cls_id == 80 or label == "ambulance") or any(kw in label for kw in getattr(config, 'AMBULANCE_CLASS_KEYWORDS', ['ambulance']))) and (conf >= amb_conf_thresh)
+            
+            # True fire truck / fire engine prediction: verified by fine-tuned weights or keywords
+            is_fire_truck_pred = (label in ["fire_truck", "firetruck", "fire engine"] or any(kw in label for kw in getattr(config, 'EMERGENCY_CLASS_KEYWORDS', ['fire_truck', 'firetruck']))) and (conf >= amb_conf_thresh)
             
             # Area fraction to reject tiny distant background noise
             area_frac = (box_width * box_height) / float(w * h)
-            if is_ambulance_pred and area_frac < getattr(config, 'AMBULANCE_MIN_AREA_FRAC', 0.010):
+            min_area_frac = getattr(config, 'AMBULANCE_MIN_AREA_FRAC', 0.010)
+            if is_ambulance_pred and area_frac < min_area_frac:
                 is_ambulance_pred = False
+            if is_fire_truck_pred and area_frac < min_area_frac:
+                is_fire_truck_pred = False
 
             is_person = (label in ["person", "pedestrian", "crowd"])
-            is_vehicle = (label in ["car", "motorcycle", "bus", "truck", "ambulance", "bicycle", "van", "suv", "auto", "vehicle"]) or (not is_person and label != "unknown")
+            is_vehicle = (label in ["car", "motorcycle", "bus", "truck", "ambulance", "fire_truck", "firetruck", "bicycle", "van", "suv", "auto", "vehicle"]) or (not is_person and label != "unknown")
             has_emergency_lights = False
             
             # Flashing emergency lightbar verification for true emergency vehicles:
@@ -237,8 +248,8 @@ class Detector:
                     r_blue = cv2.inRange(roof, np.array([95, 90, 90]), np.array([135, 255, 255]))
                     roof_blue = cv2.countNonZero(r_blue) / rf_area
                     
-                    # If model classified as ambulance, verify if strobes are flashing
-                    if is_ambulance_pred:
+                    # If model classified as ambulance or fire truck, verify if strobes are flashing
+                    if is_ambulance_pred or is_fire_truck_pred:
                         if (roof_red > 0.030 or roof_blue > 0.030):
                             has_emergency_lights = True
                     # Optical heuristic reclassification ONLY if explicitly enabled in config
@@ -251,16 +262,21 @@ class Detector:
                             label = "ambulance"
 
             is_ambulance = is_ambulance_pred
+            is_fire_truck = is_fire_truck_pred
+            is_emergency = is_ambulance or is_fire_truck
+            
             if not is_ambulance and label == "ambulance":
                 label = "car"  # Demote low-confidence / small detections to normal car
+            if not is_fire_truck and label in ["fire_truck", "firetruck"]:
+                label = "truck"
             
             # Filter non-traffic classes
-            if not (is_vehicle or is_person or is_ambulance):
+            if not (is_vehicle or is_person or is_emergency):
                 continue
             
             # Assign Passenger Car Unit (PCU) weight
             pcu_val = self._pcu_weights.get(label, 1.0)
-            if is_ambulance:
+            if is_emergency:
                 pcu_val = 0.0  # Handled via preemption override
             
             det = Detection(
@@ -273,6 +289,8 @@ class Detector:
                 is_ambulance=is_ambulance,
                 pcu=pcu_val,
                 has_emergency_lights=has_emergency_lights,
+                is_fire_truck=is_fire_truck,
+                is_emergency_vehicle=is_emergency,
             )
             detections.append(det)
         
@@ -283,7 +301,8 @@ class Detector:
         """Render high-contrast tactical bounding boxes, corner brackets, and PCU tags."""
         for det in detections:
             color = self.COLORS.get(det.label, self.COLORS["default"])
-            thickness = 2 if not det.is_ambulance else 3
+            is_emergency = det.is_ambulance or getattr(det, 'is_fire_truck', False) or getattr(det, 'is_emergency_vehicle', False)
+            thickness = 3 if is_emergency else 2
             
             # 1. Bounding box outline with slight transparency effect
             cv2.rectangle(frame, (det.x1, det.y1), (det.x2, det.y2), color, thickness, cv2.LINE_AA)
@@ -306,7 +325,15 @@ class Detector:
             
             # 3. Label Header Pill Badge (Clean detection pill without PCU)
             if show_labels:
-                badge_lbl = "AMBULANCE [LIGHTS]" if (det.is_ambulance and getattr(det, 'has_emergency_lights', False)) else det.label.upper()
+                is_ft = getattr(det, 'is_fire_truck', False) or det.label in ["fire_truck", "firetruck"]
+                is_amb = det.is_ambulance or det.label == "ambulance"
+                has_lights = getattr(det, 'has_emergency_lights', False)
+                if is_ft:
+                    badge_lbl = "FIRE TRUCK [LIGHTS]" if has_lights else "FIRE TRUCK"
+                elif is_amb:
+                    badge_lbl = "AMBULANCE [LIGHTS]" if has_lights else "AMBULANCE"
+                else:
+                    badge_lbl = det.label.upper()
                 label_txt = f"{badge_lbl} {int(det.confidence * 100)}%"
                 
                 (tw, th), _ = cv2.getTextSize(label_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
@@ -335,16 +362,23 @@ class Detector:
             cv2.circle(frame, det.centroid, 6, color, 1, cv2.LINE_AA)
             
             # 5. Emergency Vehicle Code-3 Preemption Banner
-            if det.is_ambulance:
+            if is_emergency:
                 banner_y1 = max(0, det.y1 - 32)
                 banner_y2 = max(0, det.y1 - 10)
                 if det.y1 <= 35:
                     banner_y1 = det.y2 + 4
                     banner_y2 = det.y2 + 26
-                banner_w = 265 if getattr(det, 'has_emergency_lights', False) else 240
-                cv2.rectangle(frame, (det.x1, banner_y1), (min(frame.shape[1], det.x1 + banner_w), banner_y2), (0, 0, 220), -1)
+                has_lights = getattr(det, 'has_emergency_lights', False)
+                banner_w = 275 if has_lights else 240
+                is_ft = getattr(det, 'is_fire_truck', False) or det.label in ["fire_truck", "firetruck"]
+                banner_color = (0, 69, 255) if is_ft else (0, 0, 220)
+                
+                cv2.rectangle(frame, (det.x1, banner_y1), (min(frame.shape[1], det.x1 + banner_w), banner_y2), banner_color, -1)
                 cv2.rectangle(frame, (det.x1, banner_y1), (min(frame.shape[1], det.x1 + banner_w), banner_y2), (255, 255, 255), 1, cv2.LINE_AA)
-                banner_txt = "[EVP] AMBULANCE • LIGHTS ACTIVE" if getattr(det, 'has_emergency_lights', False) else "[EVP] CODE-3 EMERGENCY"
+                if is_ft:
+                    banner_txt = "[EVP] FIRE RESCUE • LIGHTS ACTIVE" if has_lights else "[EVP] FIRE RESCUE • CODE-3"
+                else:
+                    banner_txt = "[EVP] AMBULANCE • LIGHTS ACTIVE" if has_lights else "[EVP] CODE-3 EMERGENCY"
                 cv2.putText(frame, banner_txt,
                             (det.x1 + 6, banner_y2 - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 2,
@@ -360,6 +394,12 @@ class Detector:
     
     def has_ambulance(self, detections: List[Detection]) -> bool:
         return any(d.is_ambulance for d in detections)
+    
+    def has_fire_truck(self, detections: List[Detection]) -> bool:
+        return any(getattr(d, 'is_fire_truck', False) for d in detections)
+    
+    def has_emergency_vehicle(self, detections: List[Detection]) -> bool:
+        return any(getattr(d, 'is_emergency_vehicle', False) or d.is_ambulance or getattr(d, 'is_fire_truck', False) for d in detections)
     
     def has_person(self, detections: List[Detection]) -> bool:
         return any(d.is_person for d in detections)

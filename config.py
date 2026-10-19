@@ -49,7 +49,13 @@ PCU_WEIGHTS = {
     "bicycle":    0.2,
     "person":     0.1,  # Used for pedestrian crossing occupancy
     "ambulance":  0.0,  # Emergency vehicle: triggers immediate preemption override
+    "fire_truck": 0.0,  # Emergency fire rescue: triggers immediate preemption override
+    "firetruck":  0.0,  # Alias
 }
+
+# Class keywords for emergency vehicle detection
+EMERGENCY_CLASS_KEYWORDS = ["ambulance", "fire_truck", "firetruck", "fire engine", "emergency"]
+AMBULANCE_CLASS_KEYWORDS = EMERGENCY_CLASS_KEYWORDS
 
 # Compatibility alias
 VEHICLE_WEIGHTS = PCU_WEIGHTS

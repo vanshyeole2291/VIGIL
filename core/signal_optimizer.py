@@ -164,8 +164,27 @@ class SignalOptimizer:
                          min(getattr(config, 'MAX_GREEN_TIME', 60.0), raw)))
     
     def trigger_emergency(self, lane: str, source: str = "visual"):
-        """Trigger emergency preemption (visual ambulance or acoustic siren)."""
+        """Trigger emergency preemption (visual ambulance/fire-truck or secondary acoustic siren)."""
         if lane not in self.PHASE_ORDER:
+            return
+        
+        # Invariant: Visual detection has absolute precedence over acoustic siren
+        if self.emergency_active and self.emergency_source == "visual" and source == "audio":
+            return
+        
+        # If currently audio emergency and visual arrives, visual overrides immediately
+        if self.emergency_active and self.emergency_source == "audio" and source == "visual":
+            self.emergency_source = "visual"
+            self.emergency_lane = lane
+            self.emergency_start = time.time()
+            if self.current_lane == lane and self.current_state == SignalState.GREEN:
+                self.signals[lane].time_left = getattr(config, 'EMERGENCY_GREEN_HOLD', 30.0)
+                return
+            if not self._in_yellow:
+                self._in_yellow = True
+                self._yellow_start = time.time()
+                self.signals[self.current_lane].state = SignalState.YELLOW
+                self.signals[self.current_lane].time_left = config.YELLOW_DURATION
             return
         
         self.emergency_active = True
@@ -208,10 +227,11 @@ class SignalOptimizer:
         self._activate_phase(self._phase_idx)
         self._phase_duration = duration
     
-    def update(self, lane_stats: Dict) -> Dict[str, SignalState]:
+    def update(self, lane_stats: Dict, has_audio_siren: bool = False, audio_lane: Optional[str] = None) -> Dict[str, SignalState]:
         """
         Main optimizer tick executed once per frame.
-        Evaluates emergency overrides, yellow transitions, and phase advancements.
+        Evaluates emergency overrides (visual primary, audio secondary fallback),
+        yellow transitions, and phase advancements.
         """
         now = time.time()
         elapsed = now - self._phase_start
@@ -226,24 +246,35 @@ class SignalOptimizer:
                 self.signals[self.current_lane].time_left = max(0.0, self.manual_override_end - now)
                 return self._get_signal_states()
         
-        # ── 2. Visual Emergency Check ───────────────────────────────────────
-        ambulance_lanes = [
+        # ── 2. Emergency Preemption: Visual (Primary) & Audio (Secondary) ───
+        visual_emergency_lanes = [
             name for name, stats in lane_stats.items()
-            if getattr(stats, 'ambulance_present', False)
+            if getattr(stats, 'emergency_present', False) or getattr(stats, 'ambulance_present', False) or getattr(stats, 'fire_truck_present', False)
         ]
         
         cooldown_ok = now > getattr(self, '_emergency_cooldown_until', 0.0)
-        if ambulance_lanes and getattr(config, 'AMBULANCE_OVERRIDE', True) and (self.emergency_active or cooldown_ok):
+        
+        # Visual is the PRIMARY mechanism
+        if visual_emergency_lanes and getattr(config, 'AMBULANCE_OVERRIDE', True) and (self.emergency_active or cooldown_ok):
             self._last_amb_time = now
-            target = ambulance_lanes[0]
-            if not self.emergency_active or self.emergency_lane != target:
+            target = visual_emergency_lanes[0]
+            if not self.emergency_active or self.emergency_lane != target or self.emergency_source != "visual":
                 self.trigger_emergency(target, source="visual")
-        elif self.emergency_active and self.emergency_source == "visual":
-            # Clear if emergency vehicle has cleared and hold duration passed
+        # Audio is strictly a SECONDARY FALLBACK when no visual vehicle is detected
+        elif not visual_emergency_lanes and has_audio_siren and getattr(config, 'AUDIO_SIREN_ENABLED', True):
+            if not self.emergency_active and cooldown_ok:
+                target_audio = audio_lane if (audio_lane in self.PHASE_ORDER) else self.current_lane
+                self.trigger_emergency(target_audio, source="audio")
+        elif self.emergency_active:
+            # Clear if emergency vehicle / siren has cleared and hold duration passed
             hold_sec = getattr(config, 'EMERGENCY_GREEN_HOLD', 12.0)
-            amb_cleared = (now - getattr(self, '_last_amb_time', 0.0) > 4.5)
-            if not ambulance_lanes and ((now - self.emergency_start > hold_sec) or amb_cleared):
-                self.clear_emergency()
+            if self.emergency_source == "visual":
+                amb_cleared = (now - getattr(self, '_last_amb_time', 0.0) > 4.5)
+                if not visual_emergency_lanes and ((now - self.emergency_start > hold_sec) or amb_cleared):
+                    self.clear_emergency()
+            elif self.emergency_source == "audio":
+                if not has_audio_siren and (now - self.emergency_start > hold_sec):
+                    self.clear_emergency()
         
         # Hard safety invariant: Prevent infinite signal starvation (max 25s preemption hold)
         max_preempt_sec = getattr(config, 'EMERGENCY_MAX_PREEMPTION', 25.0)

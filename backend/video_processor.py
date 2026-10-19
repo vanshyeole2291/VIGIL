@@ -177,10 +177,10 @@ class VideoProcessor:
             if now - self._last_incident_time > 4.0:
                 # 1. Emergency Preemption Trigger
                 if getattr(self.optimizer, 'emergency_active', False):
-                    em_lane = getattr(self.optimizer, 'emergency_lane', 'Approach') or "Approach"
+                    em_source = getattr(self.optimizer, 'emergency_source', 'visual')
                     self.record_incident(
                         inc_type="ambulance",
-                        description=f"Emergency priority corridor active on {em_lane}.",
+                        description=f"Class-1 Emergency Corridor ({em_source.upper()}) active on {em_lane}.",
                         frame=annotated,
                         lane=em_lane
                     )
