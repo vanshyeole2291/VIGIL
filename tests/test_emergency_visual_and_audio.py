@@ -200,3 +200,51 @@ class TestEmergencyVisualAndAudio:
         t_dict = t.to_dict()
         assert t_dict["is_fire_truck"] is True
         assert t_dict["is_emergency_vehicle"] is True
+
+    def test_traffic_analyzer_visual_emergency_trigger(self):
+        """TrafficAnalyzer.update() generates emergency alerts and triggers optimizer EVP on visual track."""
+        from core.traffic_analyzer import TrafficAnalyzer
+        analyzer = TrafficAnalyzer()
+        optimizer = SignalOptimizer()
+        
+        fire_track = Track(
+            track_id=10,
+            label="fire_truck",
+            cx=200, cy=200,
+            x1=150, y1=150, x2=250, y2=250,
+            is_vehicle=True,
+            is_person=False,
+            is_ambulance=False,
+            is_fire_truck=True,
+            is_emergency_vehicle=True,
+            pcu=0.0
+        )
+        fire_track.lane = "East"
+        
+        lane_stats = {
+            "North": LaneStats(name="North"),
+            "South": LaneStats(name="South"),
+            "East":  LaneStats(name="East", fire_truck_present=True, emergency_present=True),
+            "West":  LaneStats(name="West"),
+        }
+        
+        alerts = analyzer.update(
+            tracks=[fire_track],
+            lane_stats=lane_stats,
+            detections=[],
+            signals=optimizer.signals,
+            current_phase=optimizer.current_lane,
+            optimizer=optimizer
+        )
+        
+        # Verify alert creation
+        assert any(a.alert_type == "fire_truck" and a.lane == "East" for a in alerts)
+        # Verify immediate optimizer preemption
+        assert optimizer.emergency_active is True
+        assert optimizer.emergency_lane == "East"
+        assert optimizer.emergency_source == "visual"
+        
+        # Verify metrics
+        metrics = analyzer.get_metrics([fire_track], lane_stats)
+        assert metrics["fire_truck_active"] is True
+        assert metrics["emergency_active"] is True

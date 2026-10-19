@@ -259,7 +259,12 @@ class VideoProcessor:
             self.optimizer.update_phase_duration(lane_stats)
             _ = self.optimizer.update(lane_stats)
             
-            _ = self.analyzer.update(tracks, lane_stats, list(detections))
+            _ = self.analyzer.update(
+                tracks, lane_stats, list(detections),
+                signals=self.optimizer.signals,
+                current_phase=self.optimizer.current_lane,
+                optimizer=self.optimizer
+            )
             
             with self.state_lock:
                 self.shared_detections = detections

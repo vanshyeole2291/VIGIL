@@ -7,7 +7,7 @@ Detects accidents, anomalies, and generates alerts.
 
 import time
 import numpy as np
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field
 import sys, os
 
@@ -85,7 +85,8 @@ class TrafficAnalyzer:
     
     def update(self, tracks, lane_stats: Dict, detections,
                signals: Optional[Dict] = None,
-               current_phase: Optional[str] = None) -> List[Alert]:
+               current_phase: Optional[str] = None,
+               optimizer: Optional[Any] = None) -> List[Alert]:
         """
         Main analysis tick.
         
@@ -95,6 +96,7 @@ class TrafficAnalyzer:
             detections:    List[Detection] from detector
             signals:       Optional Dict[str, LaneSignal] with current light states
             current_phase: Optional active green approach name
+            optimizer:     Optional SignalOptimizer for immediate preemption override
         
         Returns:
             New alerts generated this tick.
@@ -114,19 +116,30 @@ class TrafficAnalyzer:
         vehicle_tracks = [t for t in tracks if t.is_vehicle]
         self.total_detected = max(self.total_detected, len(vehicle_tracks))
         
-        # ── Ambulance alerts ─────────────────────────────────────────────────
+        # ── Emergency Vehicle (Ambulance & Fire Truck) alerts & preemption ───
         for track in tracks:
-            if track.is_ambulance:
-                if not any(a.alert_type == "ambulance" and a.lane == track.lane for a in self.alerts
+            is_ft = getattr(track, 'is_fire_truck', False) or track.label in ["fire_truck", "firetruck"]
+            is_amb = track.is_ambulance or track.label == "ambulance"
+            is_em = getattr(track, 'is_emergency_vehicle', False) or is_amb or is_ft
+            if is_em:
+                em_name = "FIRE TRUCK" if is_ft else "AMBULANCE"
+                em_icon = "🚒" if is_ft else "🚑"
+                em_type = "fire_truck" if is_ft else "ambulance"
+                if not any(a.alert_type in ["ambulance", "fire_truck", "emergency_vehicle"] and a.lane == track.lane for a in self.alerts
                            if a.age < self.ALERT_EXPIRY):
                     alert = Alert(
-                        alert_type="ambulance",
-                        message=f"🚑 AMBULANCE detected in {track.lane or 'unknown'} lane!",
+                        alert_type=em_type,
+                        message=f"{em_icon} {em_name} detected in {track.lane or 'unknown'} lane!",
                         lane=track.lane,
                         severity="critical"
                     )
                     new_alerts.append(alert)
                     self.total_emergency += 1
+                
+                # Immediate visual preemption override on optimizer
+                if optimizer is not None and track.lane:
+                    if not getattr(optimizer, 'emergency_active', False) or getattr(optimizer, 'emergency_lane', None) != track.lane:
+                        optimizer.trigger_emergency(track.lane, source="visual")
         
         # ── Accident / Incident detection (per-lane cooldown) ─────────────────
         acc_alerts = self._check_accidents(tracks, detections, lane_stats,
@@ -450,6 +463,8 @@ class TrafficAnalyzer:
                 "avg_speed_kmh":    round(getattr(s, 'avg_speed_kmh', 0.0), 1),
                 "congestion_level": s.congestion_level,
                 "ambulance_present": s.ambulance_present,
+                "fire_truck_present": getattr(s, 'fire_truck_present', False),
+                "emergency_present": getattr(s, 'emergency_present', False) or s.ambulance_present or getattr(s, 'fire_truck_present', False),
             }
 
         return {
@@ -460,6 +475,8 @@ class TrafficAnalyzer:
             "total_pcu":        round(total_pcu, 1),
             "total_persons":    sum(1 for t in tracks if t.is_person),
             "ambulance_active": any(t.is_ambulance for t in tracks),
+            "fire_truck_active": any(getattr(t, 'is_fire_truck', False) for t in tracks),
+            "emergency_active": any(t.is_ambulance or getattr(t, 'is_fire_truck', False) or getattr(t, 'is_emergency_vehicle', False) for t in tracks),
             "avg_wait_sec":     round(avg_wait, 1),
             "session_uptime":   round(time.time() - self.session_start, 0),
             "total_alerts":     len(self.alerts),
@@ -480,6 +497,12 @@ class TrafficAnalyzer:
             },
         }
     
+    def get_metrics(self, tracks=None, lane_stats=None, detections=None) -> Dict:
+        """Public accessor for traffic metrics dictionary."""
+        if tracks is not None and lane_stats is not None:
+            return self._build_metrics(tracks, lane_stats, detections)
+        return self.metrics
+
     def draw_overlay(self, frame, lane_stats: Dict) -> None:
         """Draw analytics overlay — vehicle counts, wait times per lane."""
         import cv2

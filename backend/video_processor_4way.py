@@ -433,7 +433,8 @@ class VideoProcessor4Way:
             self.analyzer.update(
                 tracks, lane_stats, list(detections),
                 signals=self.optimizer.signals,
-                current_phase=self.optimizer.current_lane
+                current_phase=self.optimizer.current_lane,
+                optimizer=self.optimizer
             )
             
             # Pedestrian conflict evaluation
