@@ -235,7 +235,9 @@ async def api_incidents():
                 seen_times[event_key] = float(inc.timestamp or 0)
 
                 tier = inc.validation_status or ("confirmed" if inc.incident_type != "accident" else "confirmed by configured rules")
-                is_sim = "test" in str(tier).lower() or "demo" in str(tier).lower() or "[simulation" in str(inc.description).lower()
+                is_sim = "test" in str(tier).lower() or "demo" in str(tier).lower() or "[simulation" in str(inc.description).lower() or "[demo" in str(inc.description).lower() or "[manual" in str(inc.description).lower()
+                if is_sim:
+                    continue
                 res.append({
                     "id": inc.id,
                     "type": inc.incident_type,
@@ -715,6 +717,7 @@ async def api_clear_incidents():
         db = SessionLocal()
         db.query(db_models.Incident).delete()
         db.query(db_models.Alert).delete()
+        db.query(db_models.Evidence).delete()
         db.commit()
         db.close()
     except Exception:

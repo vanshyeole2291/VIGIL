@@ -483,9 +483,10 @@ class VideoProcessor4Way:
             
             self.latest_frame = annotated
             
-            # ── Tactical Incident Detection & Evidence Logging (Debounced) ─────────
+            # ── Tactical Incident Detection & Evidence Logging ─────────────────────
             now = time.time()
-            if now - self._last_incident_time > 15.0:
+            has_urgent_accident = any("accident" in str(a.get("type", "")).lower() or "collision" in str(a.get("message", "")).lower() for a in self.latest_alerts)
+            if has_urgent_accident or (now - self._last_incident_time > 15.0):
                 ranked_candidates = []
                 
                 # Priority 1: Accidents & Safety Hazards from Analyzer (Accidents strictly gated)
@@ -542,7 +543,8 @@ class VideoProcessor4Way:
             time.sleep(max(0, frame_delay - elapsed))
             
         for c in caps:
-            c.release()
+            if c is not None:
+                c.release()
 
     def _inference_thread(self):
         while self.is_running:
@@ -775,7 +777,7 @@ class VideoProcessor4Way:
         dedup_key = f"{inc_type}:{exact_camera_id}"
         with self.state_lock:
             last_logged = self._active_logged_events.get(dedup_key, 0.0)
-            if now - last_logged < 600.0:  # 10 minute cooldown prevents repeated flooding
+            if now - last_logged < 15.0:  # 15s cooldown prevents single-frame duplicates
                 return
             self._active_logged_events[dedup_key] = now
 
@@ -915,7 +917,7 @@ class VideoProcessor4Way:
                     recent_db = db_session.query(db_models.Incident).filter_by(
                         incident_type=inc_type,
                         camera_id=exact_camera_id
-                    ).filter(db_models.Incident.timestamp > now - 600.0).first()
+                    ).filter(db_models.Incident.timestamp > now - 15.0).first()
                     if recent_db:
                         return
 
@@ -1021,32 +1023,8 @@ class VideoProcessor4Way:
         return ""
 
     def _seed_initial_incidents(self) -> List[Dict]:
-        """Load genuine incidents from persistent database or start empty."""
-        incidents = []
-        try:
-            db_session = SessionLocal()
-            try:
-                db_recs = db_session.query(db_models.Incident).order_by(db_models.Incident.timestamp.desc()).limit(20).all()
-                for rec in db_recs:
-                    incidents.append({
-                        "id": rec.id,
-                        "type": rec.incident_type,
-                        "lane": rec.lane,
-                        "camera_id": rec.camera_id,
-                        "cctv_name": getattr(rec, "cctv_name", None) or rec.camera_id,
-                        "description": rec.description,
-                        "timestamp": rec.timestamp,
-                        "frame_b64": rec.snapshot_b64,
-                        "camera_frame_b64": rec.snapshot_b64,
-                        "cropped_image_b64": rec.snapshot_b64,
-                        "vehicle_crop_b64": rec.snapshot_b64,
-                        "evidence_id": rec.evidence_id,
-                    })
-            finally:
-                db_session.close()
-        except Exception as e:
-            print(f"[Seed] Incident load note: {e}")
-        return incidents
+        """Start incident feed 100% clean and fresh upon launch."""
+        return []
 
     def set_quadrant_mapping(self, mapping: List[int]):
         if len(mapping) == 4:

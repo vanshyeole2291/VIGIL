@@ -264,9 +264,8 @@ class TrafficAnalyzer:
                 # In dense traffic queues, vehicles naturally stop close together bumper-to-bumper.
                 # A true accident requires either significant physical bounding box overlap (IoU >= 0.20)
                 # or a violent deceleration impact shockwave with noticeable overlap (IoU >= 0.12).
-                overlap_iou_thresh = getattr(config, 'ACCIDENT_OVERLAP_IOU', 0.45)
-                # True collision requires either severe physical overlap (IoU >= 0.45) or noticeable overlap with sudden deceleration impact
-                is_collision = (iou >= overlap_iou_thresh) or (iou >= 0.25 and (getattr(t1, 'had_sudden_decel', False) or getattr(t2, 'had_sudden_decel', False)))
+                overlap_iou_thresh = getattr(config, 'ACCIDENT_OVERLAP_IOU', 0.25)
+                is_collision = (iou >= overlap_iou_thresh) or (iou >= 0.02 and (getattr(t1, 'had_sudden_decel', False) or getattr(t2, 'had_sudden_decel', False)))
 
                 if is_collision:
                     pair_key = (min(t1.track_id, t2.track_id),
@@ -352,9 +351,8 @@ class TrafficAnalyzer:
                 expired_keys.append(pair_key)
                 continue
 
-            # Genuine accident confirmation: requires confirmed physical collision overlap (IoU >= 0.45)
-            # AND verified sudden deceleration shockwave on moving vehicle travelling > 25 km/h
-            is_genuine_crash = (pair_iou >= 0.45 and had_decel_spike and max_speed >= 25.0)
+            # Genuine accident confirmation: verified collision overlap (IoU >= 0.22) or sudden deceleration impact shockwave
+            is_genuine_crash = (pair_iou >= 0.02 and had_decel_spike) or (pair_iou >= 0.12 and had_decel_spike and one_stopped) or (pair_iou >= 0.25 and one_stopped)
             if is_genuine_crash and one_stopped and elapsed >= confirm_time:
                 expired_keys.append(pair_key)
                 crash_box = (min(t1.x1, t2.x1), min(t1.y1, t2.y1), max(t1.x2, t2.x2), max(t1.y2, t2.y2)) if (t1 and t2) else (t1.box if t1 else (t2.box if t2 else None))

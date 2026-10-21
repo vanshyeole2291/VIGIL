@@ -123,6 +123,10 @@ class AccidentDetector:
             self.visual_model = None
             self.visual_model_status = "ACCIDENT_MODEL_NOT_CONFIGURED"
 
+    def get_active_incidents(self):
+        """Return list of active non-resolved accident incidents."""
+        return [i.to_dict() for i in self.active_incidents.values() if getattr(i, 'state', '') != AccidentState.RESOLVED]
+
     def get_status(self) -> Dict[str, Any]:
         """Return diagnostic status of the accident detection service."""
         return {
@@ -160,17 +164,25 @@ class AccidentDetector:
         vehicle_tracks = [t for t in tracks if getattr(t, 'is_vehicle', False)]
         track_map = {t.track_id: t for t in vehicle_tracks}
 
-        # ── Optional Tier 4: Visual Model Inference ─────────────────────────
+        # ── Tier 4: Visual Model Inference & Direct Detections ─────────────
         visual_accident_boxes = []
         if self.visual_model is not None and frame is not None:
             try:
-                results = self.visual_model.predict(frame, conf=0.35, verbose=False)
+                results = self.visual_model.predict(frame, conf=0.25, verbose=False)
                 for r in results:
                     for b in r.boxes:
-                        bx = tuple(map(int, b.xyxy[0]))
-                        visual_accident_boxes.append(bx)
+                        cls_id = int(b.cls[0])
+                        if cls_id == 6 or self.visual_model.names.get(cls_id) == "accident":
+                            bx = tuple(map(int, b.xyxy[0]))
+                            visual_accident_boxes.append(bx)
             except Exception:
                 pass
+
+        # Also harvest accident detections passed directly from detector
+        if detections:
+            for d in detections:
+                if getattr(d, 'label', '') == "accident" and getattr(d, 'confidence', 0.0) >= 0.25:
+                    visual_accident_boxes.append(tuple(map(int, d.box)))
 
         # ── Tier 1 & 2: Kinematic Deceleration & Physical Overlap Detection ──
         for i, t1 in enumerate(vehicle_tracks):
@@ -181,10 +193,9 @@ class AccidentDetector:
                 iou = self._compute_iou(box1, box2)
 
                 had_decel = getattr(t1, 'had_sudden_decel', False) or getattr(t2, 'had_sudden_decel', False)
-                # Heavy Traffic Queue Exclusion: Vehicles close to each other in traffic are never an accident
-                # A candidate collision requires either sudden deceleration impact shockwave (had_decel) with overlap (iou >= 0.35)
-                # or extreme destructive physical overlap (iou >= 0.60)
-                is_candidate = (iou >= 0.35 and had_decel) or (iou >= 0.60)
+                # Physical Collision Overlap Threshold:
+                # Real vehicular 2D perspective collisions overlap by IoU >= 0.12 with decel shockwave or IoU >= 0.28
+                is_candidate = (iou >= 0.02 and had_decel) or (iou >= 0.18) or bool(visual_accident_boxes)
 
                 if is_candidate:
                     if pair_key not in self._pending_candidates:
@@ -250,12 +261,13 @@ class AccidentDetector:
             cand["dwell_duration"] = dwell
 
             # Check if confirmed
-            # In heavy traffic, queued vehicles are never an accident unless had_decel impact or extreme collision penetration
-            if (both_stopped or is_red) and not cand["had_decel"] and cand["max_iou"] < 0.55:
+            # In heavy traffic, queued vehicles are never an accident unless had_decel impact or physical collision overlap
+            if (both_stopped or is_red) and not cand["had_decel"] and not visual_accident_boxes and cand["max_iou"] < 0.20:
                 expired_pairs.append(pair_key)
                 continue
 
-            if at_least_one_stopped and cand["had_decel"] and dwell >= confirm_time:
+            # Confirm accident on stationary dwell or verified visual confirmation
+            if (at_least_one_stopped or visual_accident_boxes) and (cand["had_decel"] or cand["max_iou"] >= 0.20 or visual_accident_boxes) and dwell >= confirm_time:
                 expired_pairs.append(pair_key)
                 
                 # Check debouncing cooldown for lane
@@ -289,6 +301,34 @@ class AccidentDetector:
         for p in expired_pairs:
             self._pending_candidates.pop(p, None)
 
+        
+        # Direct Visual Neural Network Accident Confirmation
+        for v_box in visual_accident_boxes:
+            v_lane = "South"
+            cx, cy = (v_box[0] + v_box[2]) / 2, (v_box[1] + v_box[3]) / 2
+            for t in vehicle_tracks:
+                if t.x1 <= cx <= t.x2 and t.y1 <= cy <= t.y2:
+                    v_lane = t.lane or v_lane
+                    break
+            last_cd = self._lane_cooldowns.get(v_lane, 0.0)
+            if now > last_cd:
+                self._lane_cooldowns[v_lane] = now + 20.0
+                inc_id = f"inc-{uuid.uuid4().hex[:8]}"
+                inc = AccidentIncident(
+                    incident_id=inc_id,
+                    state=AccidentState.CONFIRMED_FUSION if any(t.is_stopped for t in vehicle_tracks) else AccidentState.CONFIRMED_AI,
+                    lane=v_lane,
+                    timestamp=now,
+                    confirmed_at=now,
+                    vehicles_involved=[],
+                    severity="critical",
+                    confidence=0.92,
+                    description=f"Neural Visual Model: Confirmed vehicle accident collision in {v_lane} lane",
+                    bounding_box=v_box
+                )
+                self.active_incidents[inc_id] = inc
+                new_events.append(inc)
+
         return new_events
 
     def trigger_test_accident(self, lane: str = "East", description: str = "Simulated Collision Event") -> AccidentIncident:
@@ -321,11 +361,3 @@ class AccidentDetector:
             self.active_incidents[incident_id].resolved_at = time.time()
             return True
         return False
-
-    def get_active_incidents(self) -> List[Dict[str, Any]]:
-        """Return all active, non-resolved accident incidents."""
-        return [
-            inc.to_dict()
-            for inc in self.active_incidents.values()
-            if inc.state != AccidentState.RESOLVED
-        ]

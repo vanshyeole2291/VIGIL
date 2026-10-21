@@ -78,6 +78,7 @@ class Detector:
         "bicycle":    (255, 220, 0  ),   # Cyan
         "person":     (0,   255, 255),   # Neon Yellow
         "ambulance":  (0,   0,   255),   # Emergency Signal Red
+        "accident":   (0,   0,   255),   # Collision Red
         "fire_truck": (0,   69,  255),   # Fire Rescue Red-Orange
         "firetruck":  (0,   69,  255),
         "default":    (200, 200, 200),
@@ -225,8 +226,9 @@ class Detector:
             aspect_ratio = float(box_width) / float(max(1, box_height))
             area_frac = (box_width * box_height) / float(w * h)
             
+            is_accident = (cls_id == 6 or label in ["accident", "collision", "crash"])
             is_person = (label in ["person", "pedestrian", "crowd"])
-            is_vehicle = (label in ["car", "motorcycle", "bus", "truck", "ambulance", "fire_truck", "firetruck", "bicycle", "van", "suv", "auto", "rickshaw", "vehicle"]) or (not is_person and label != "unknown")
+            is_vehicle = (not is_accident) and ((label in ["car", "motorcycle", "bus", "truck", "ambulance", "fire_truck", "firetruck", "bicycle", "van", "suv", "auto", "rickshaw", "vehicle"]) or (not is_person and label != "unknown"))
             has_emergency_lights = False
             is_auto_rickshaw = False
             
@@ -295,7 +297,9 @@ class Detector:
                 label = "truck"
             
             # Filter non-traffic classes
-            if not (is_vehicle or is_person or is_emergency):
+            if is_accident:
+                label = "accident"
+            elif not (is_vehicle or is_person or is_emergency):
                 continue
             
             # Assign Passenger Car Unit (PCU) weight

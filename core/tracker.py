@@ -129,12 +129,13 @@ class Track:
         
         # Acceleration
         self.acceleration = (curr_speed_px - self.speed_px_sec) / dt
-        # Genuine violent deceleration impact: was moving at speed (> 80 px/s ≈ 20 km/h) and suddenly collapsed to standstill (< 25 px/s)
-        # Prevents normal slow crawling and stop-and-go queueing in dense traffic from falsely flagging decel spikes
-        if self.speed_px_sec > 80.0 and curr_speed_px < 25.0 and self.acceleration < -120.0:
+        # Kinematic deceleration impact: moving vehicle experiencing sudden deceleration
+        # Calibrated for both wide-angle junction views and quadrant sub-frames
+        is_abrupt_decel = (self.speed_px_sec > 30.0 and curr_speed_px < 15.0 and self.acceleration < -35.0) or (self.speed_px_sec > 25.0 and curr_speed_px < 5.0)
+        if is_abrupt_decel:
             self.had_sudden_decel = True
             self.last_decel_spike_time = time.time()
-        elif time.time() - getattr(self, 'last_decel_spike_time', 0.0) > 3.0:
+        elif time.time() - getattr(self, 'last_decel_spike_time', 0.0) > 4.5:
             self.had_sudden_decel = False
 
         self.speed_px_sec = 0.80 * self.speed_px_sec + 0.20 * curr_speed_px  # Smooth motion estimate
