@@ -1,0 +1,34 @@
+﻿# ==============================================================================
+# VIGIL — YOLOv8 Emergency Vehicle Dataset Configuration
+# ==============================================================================
+# Architecture: Multi-Class Urban Traffic with Class-1 Emergency Vehicles
+# Target Model: YOLOv8 / YOLOv11 (Ultralytics)
+#
+# Directory Structure Expected:
+#   dataset/emergency_vehicles/
+#   ├── images/
+#   │   ├── train/  (*.jpg, *.png)
+#   │   ├── val/    (*.jpg, *.png)
+#   │   └── test/   (*.jpg, *.png, optional)
+#   └── labels/
+#       ├── train/  (*.txt - YOLO format: <class_id> <cx> <cy> <w> <h>)
+#       ├── val/    (*.txt)
+#       └── test/   (*.txt, optional)
+# ==============================================================================
+
+# Dataset root directory (relative to scripts/ or absolute path)
+path: ../dataset/emergency_vehicles
+
+# Subdirectory paths relative to 'path'
+train: images/train
+val: images/val
+test: images/test
+
+# Class ID to Label Mapping
+names:
+  0: car
+  1: motorcycle
+  2: bus
+  3: truck
+  4: ambulance
+  5: fire_truck

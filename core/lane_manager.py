@@ -24,6 +24,8 @@ class LaneStats:
     pcu_count:         float = 0.0     # Equivalent passenger car units (IRC/HCM)
     person_count:      int   = 0
     ambulance_present: bool  = False
+    fire_truck_present: bool = False
+    emergency_present: bool  = False
     density_ratio:     float = 0.0     # 0.0–1.0 (polygon area occupancy)
     avg_speed_kmh:     float = 0.0     # Average vehicle approach speed
     avg_wait_time:     float = 0.0     # Average queue stopped duration (seconds)
@@ -117,6 +119,8 @@ class LaneManager:
         lane_pcu:       Dict[str, float] = {n: 0.0 for n in self.lane_names}
         lane_persons:   Dict[str, int]   = {n: 0   for n in self.lane_names}
         lane_ambul:     Dict[str, bool]  = {n: False for n in self.lane_names}
+        lane_fire:      Dict[str, bool]  = {n: False for n in self.lane_names}
+        lane_em:        Dict[str, bool]  = {n: False for n in self.lane_names}
         lane_stopped:   Dict[str, int]   = {n: 0   for n in self.lane_names}
         lane_wait:      Dict[str, List[float]] = {n: [] for n in self.lane_names}
         lane_speeds:    Dict[str, List[float]] = {n: [] for n in self.lane_names}
@@ -146,7 +150,16 @@ class LaneManager:
                 if hasattr(track, 'speed_kmh'):
                     lane_speeds[lane].append(track.speed_kmh)
                 
-                if track.is_ambulance:
+                is_ft = getattr(track, 'is_fire_truck', False) or track.label in ["fire_truck", "firetruck"]
+                is_amb = track.is_ambulance or track.label == "ambulance"
+                is_em = getattr(track, 'is_emergency_vehicle', False) or is_amb or is_ft
+                
+                if is_ft:
+                    lane_fire[lane] = True
+                if is_amb:
+                    lane_ambul[lane] = True
+                if is_em:
+                    lane_em[lane] = True
                     lane_ambul[lane] = True
             
             elif track.is_person:
@@ -163,6 +176,8 @@ class LaneManager:
             s.pcu_count         = round(lane_pcu[name], 1)
             s.person_count      = lane_persons[name]
             s.ambulance_present = lane_ambul[name]
+            s.fire_truck_present = lane_fire[name]
+            s.emergency_present = lane_em[name]
             s.density_ratio     = min(1.0, lane_bbox_area[name] / max(area, 1.0))
             s.avg_speed_kmh     = round(sum(speeds) / len(speeds), 1) if speeds else 0.0
             s.avg_wait_time     = round(sum(waits) / len(waits), 1) if waits else 0.0

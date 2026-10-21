@@ -24,10 +24,10 @@ def open_browser(port: int, delay: float = 2.5):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="AI Traffic 4-Way Dashboard")
-    parser.add_argument("--v_north", type=str, default="assets/videos/north.mp4", help="Path to North video")
-    parser.add_argument("--v_south", type=str, default="assets/videos/south.mp4", help="Path to South video")
-    parser.add_argument("--v_east", type=str, default="assets/videos/east.mp4", help="Path to East video")
-    parser.add_argument("--v_west", type=str, default="assets/videos/west.mp4", help="Path to West video")
+    parser.add_argument("--v_north", type=str, default="", help="Path to North video")
+    parser.add_argument("--v_south", type=str, default="", help="Path to South video")
+    parser.add_argument("--v_east", type=str, default="", help="Path to East video")
+    parser.add_argument("--v_west", type=str, default="", help="Path to West video")
     parser.add_argument("--port", type=int, default=8000, help="Server port")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Server host")
     parser.add_argument("--no-browser", action="store_true", help="Don't open browser")

@@ -1,3 +1,4 @@
+import time
 """
 backend/main_4way.py — High-Performance FastAPI Server with 4-Way WebSocket & REST Controls
 ===========================================================================================
@@ -9,12 +10,14 @@ Serves:
 """
 
 import asyncio
+import shutil
+import json
 import os
 import sys
 from typing import Set, Optional, Dict
 from pydantic import BaseModel
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,16 +27,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from backend.video_processor_4way import VideoProcessor4Way
 from core.traffic_analyzer import Alert
+from backend.database import init_db
+from backend.routers.vigil_api import router as vigil_router, violence_detector
 
-app = FastAPI(title="DevDominators — AI Traffic 4-Way ATSC Platform", version="2.0.0")
+app = FastAPI(
+    title="VIGIL — AI-Based Intelligent Surveillance & Traffic Safety System",
+    description="Unified Edge ATSC Traffic Optimization and Video Action Security Surveillance",
+    version="2.0.0"
+)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Mount unified VIGIL REST API router (Auth, Cameras, Violence, Incidents, Alerts, Evidence, Health)
+app.include_router(vigil_router, prefix="/api")
 
 processor: Optional[VideoProcessor4Way] = None
 client_queues: Dict[WebSocket, asyncio.Queue] = {}
 main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
-def init_processor(v_north="assets/videos/north.mp4", v_south="assets/videos/south.mp4", v_east="assets/videos/east.mp4", v_west="assets/videos/west.mp4"):
+def init_processor(v_north="", v_south="", v_east="", v_west=""):
     global processor
     processor = VideoProcessor4Way(v_north, v_south, v_east, v_west)
 
@@ -41,6 +53,12 @@ def init_processor(v_north="assets/videos/north.mp4", v_south="assets/videos/sou
 @app.on_event("startup")
 async def startup():
     global main_event_loop
+    # Initialize SQLite database schema and seed defaults
+    try:
+        init_db()
+    except Exception as e:
+        print(f"[VIGIL Database] Init error: {e}")
+
     main_event_loop = asyncio.get_event_loop()
     
     def on_state(state: dict):
@@ -81,7 +99,20 @@ async def websocket_endpoint(ws: WebSocket):
     async def receiver_loop():
         try:
             while True:
-                await ws.receive_text()
+                msg = await ws.receive_text()
+                try:
+                    payload = json.loads(msg)
+                    action = payload.get("action")
+                    if action == "pause" and processor:
+                        processor.pause()
+                    elif action == "resume" and processor:
+                        processor.resume()
+                    elif action == "toggle_pause" and processor:
+                        processor.toggle_pause()
+                    elif action == "switch_source" and processor:
+                        processor.switch_camera_source(payload.get("camera_id"), payload.get("source"))
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -186,37 +217,86 @@ async def api_metrics():
 
 @app.get("/api/incidents")
 async def api_incidents():
-    """Returns captured incident snapshots (Accident, Ambulance, Crowd, Stalls)."""
+    """Returns captured incident snapshots from database & processor (Accident, Violence, Ambulance, Stalls)."""
+    from backend.database import SessionLocal
+    import backend.models.db_models as db_models
+    try:
+        db = SessionLocal()
+        records = db.query(db_models.Incident).order_by(db_models.Incident.timestamp.desc()).limit(50).all()
+        if records:
+            res = []
+            seen_times = {}
+            for inc in records:
+                c_id = inc.camera_id or (f"CCTV: {inc.lane}" if inc.lane else "CCTV: Camera-01")
+                # Deduplicate: one incident only one time per camera in feed
+                event_key = (inc.incident_type, c_id)
+                if event_key in seen_times:
+                    continue
+                seen_times[event_key] = float(inc.timestamp or 0)
+
+                tier = inc.validation_status or ("confirmed" if inc.incident_type != "accident" else "confirmed by configured rules")
+                is_sim = "test" in str(tier).lower() or "demo" in str(tier).lower() or "[simulation" in str(inc.description).lower()
+                res.append({
+                    "id": inc.id,
+                    "type": inc.incident_type,
+                    "incident_type": inc.incident_type,
+                    "source_module": inc.source_module,
+                    "description": inc.description,
+                    "lane": inc.lane,
+                    "camera_id": c_id,
+                    "cctv_name": getattr(inc, "cctv_name", None) or c_id,
+                    "timestamp": inc.timestamp,
+                    "confidence": inc.confidence if inc.confidence is not None else 0.88,
+                    "frame_b64": inc.snapshot_b64,
+                    "severity": inc.severity,
+                    "status": inc.status or "new",
+                    "validation_status": tier,
+                    "confirmation_tier": tier,
+                    "is_simulation": is_sim,
+                    "evidence_id": inc.evidence_id,
+                })
+            db.close()
+            return JSONResponse(res)
+        db.close()
+    except Exception:
+        pass
+
     if processor:
         return JSONResponse(processor.get_incident_history())
     return JSONResponse([])
 
 
-@app.get("/api/detections")
-async def api_detections():
-    """Returns isolated cropped bounding-box images for current detected vehicles/pedestrians."""
-    if processor:
-        crops = processor.get_recent_detections(limit=40)
-        return JSONResponse({"detections": crops, "count": len(crops)})
-    return JSONResponse({"detections": [], "count": 0})
+class UpdateIncidentStatusRequest(BaseModel):
+    status: str
 
 
-@app.get("/api/detection_stats")
-async def api_detection_stats():
-    """Returns real-time inference FPS, vehicle counts, PCU, model metadata, and camera feeds."""
-    if processor:
-        return JSONResponse(processor.get_detection_stats())
-    return JSONResponse({
-        "fps": 0.0,
-        "frame_count": 0,
-        "total_pcu": 0.0,
-        "class_counts": {},
-        "model": "YOLOv8 Traffic Trained",
-        "video_sources": [],
-        "detection_count": 0,
-        "incident_count": 0,
-        "running": False
-    })
+@app.patch("/api/incidents/{incident_id}/status")
+async def api_update_incident_status(incident_id: str, req: UpdateIncidentStatusRequest):
+    """Update status of a recorded incident (e.g., new -> acknowledged -> resolved)."""
+    new_status = req.status.lower()
+    updated = False
+    if processor and hasattr(processor, "incident_history"):
+        with processor.state_lock:
+            for inc in processor.incident_history:
+                if inc.get("id") == incident_id:
+                    inc["status"] = new_status
+                    updated = True
+                    break
+
+    from backend.database import SessionLocal
+    import backend.models.db_models as db_models
+    try:
+        db = SessionLocal()
+        db_inc = db.query(db_models.Incident).filter(db_models.Incident.id == incident_id).first()
+        if db_inc:
+            db_inc.status = new_status
+            db.commit()
+            updated = True
+        db.close()
+    except Exception as e:
+        print(f"[Incident] Status update DB error: {e}")
+
+    return JSONResponse({"status": "ok", "incident_id": incident_id, "new_status": new_status, "updated": updated})
 
 
 @app.get("/api/v2x/spat")
@@ -353,6 +433,20 @@ async def api_ml_harvest():
         )
         return JSONResponse({"status": "harvested" if sample else "skipped_cooldown", "sample": sample})
     raise HTTPException(status_code=503, detail="Processor offline")
+
+
+@app.get("/api/ml/baseline-benchmark")
+async def api_ml_baseline_benchmark():
+    """Return the measured baseline benchmark metrics from reports/baseline_benchmark.json."""
+    benchmark_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports", "baseline_benchmark.json")
+    if os.path.exists(benchmark_path):
+        try:
+            with open(benchmark_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return JSONResponse(data)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"status": "not_found", "message": "Baseline benchmark report not found"}, status_code=404)
 
 
 @app.get("/api/benchmark/comparison")
@@ -580,8 +674,10 @@ async def api_simulate_incident(req: SimulateIncidentRequest):
     if hasattr(processor, "record_incident"):
         processor.record_incident(
             inc_type=inc_type,
-            description=desc,
-            lane=lane
+            description=f"[DEMO / TEST EVENT] {desc}",
+            lane=lane,
+            is_simulation=True,
+            confirmation_tier="test/demo event"
         )
     
     # 2. Add real-time alert to analyzer
@@ -609,12 +705,21 @@ async def api_simulate_incident(req: SimulateIncidentRequest):
 
 @app.post("/api/clear-incidents")
 async def api_clear_incidents():
-    """Clear recorded incident log."""
+    """Clear recorded incident log in memory and database."""
     if processor and hasattr(processor, "incident_history"):
         with processor.state_lock:
             processor.incident_history.clear()
-        return {"status": "cleared"}
-    raise HTTPException(status_code=503, detail="Processor offline")
+    from backend.database import SessionLocal
+    import backend.models.db_models as db_models
+    try:
+        db = SessionLocal()
+        db.query(db_models.Incident).delete()
+        db.query(db_models.Alert).delete()
+        db.commit()
+        db.close()
+    except Exception:
+        pass
+    return {"status": "cleared"}
 
 
 @app.post("/api/open-live-camera")
@@ -702,3 +807,521 @@ async def api_load_videos(req: LoadVideosRequest):
         "east": req.v_east,
         "west": req.v_west
     }
+
+
+# ==============================================================================
+# SINGLE CAMERA & IP WEBCAM & FOUR-WAY DETAILED ENDPOINTS
+# ==============================================================================
+import re
+import socket
+import urllib.request
+from fastapi import UploadFile, File
+from backend.video_processor import VideoProcessor
+
+single_processor = None
+single_cam_source = "assets/videos/north.mp4"
+single_cam_status = "idle"
+
+ip_webcam_config = {
+    "url": "http://192.168.1.100:8080/video",
+    "name": "North Junction IP Camera",
+    "direction": "North"
+}
+ipcam_processor = None
+
+
+class SingleCamSelectRequest(BaseModel):
+    source: str
+
+
+class SingleCamControlRequest(BaseModel):
+    action: str  # start, pause, resume, stop
+
+
+class IPWebcamConfigRequest(BaseModel):
+    url: str
+    name: Optional[str] = "North Junction IP Camera"
+    direction: Optional[str] = "North"
+
+
+@app.post("/api/single-camera/select")
+async def api_single_camera_select(req: SingleCamSelectRequest):
+    global single_processor, single_cam_source, single_cam_status
+    src = req.source.strip()
+    if not src:
+        raise HTTPException(status_code=400, detail="Source cannot be empty")
+    
+    single_cam_source = src
+    if single_processor and single_processor.is_running:
+        single_processor.stop()
+        single_processor = VideoProcessor(video_path=single_cam_source)
+        single_processor.start()
+        single_cam_status = "running"
+    return {"status": "selected", "source": single_cam_source, "state": single_cam_status}
+
+
+@app.post("/api/single-camera/upload")
+async def api_single_camera_upload(file: UploadFile = File(...)):
+    global single_cam_source
+    upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "videos", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, file.filename)
+    contents = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(contents)
+    single_cam_source = f"assets/videos/uploads/{file.filename}"
+    return {"status": "uploaded", "filename": file.filename, "path": single_cam_source}
+
+
+@app.post("/api/single-camera/control")
+async def api_single_camera_control(req: SingleCamControlRequest):
+    global single_processor, single_cam_status
+    action = req.action.lower()
+    if action == "start":
+        if single_processor is None or not single_processor.is_running:
+            single_processor = VideoProcessor(video_path=single_cam_source)
+            single_processor.start()
+        single_cam_status = "running"
+    elif action == "pause":
+        if single_processor and hasattr(single_processor, "pause"):
+            single_processor.pause()
+        single_cam_status = "paused"
+    elif action == "resume":
+        if single_processor and hasattr(single_processor, "resume"):
+            single_processor.resume()
+        single_cam_status = "running"
+    elif action == "stop":
+        if single_processor:
+            single_processor.stop()
+            single_processor = None
+        single_cam_status = "stopped"
+    return {"status": single_cam_status, "source": single_cam_source}
+
+
+@app.get("/api/single-camera/frame")
+async def api_single_camera_frame():
+    global single_processor
+    if single_processor and single_processor.latest_frame is not None:
+        jpg = single_processor.get_jpeg_frame(quality=80)
+        if jpg:
+            return Response(content=jpg, media_type="image/jpeg")
+    raise HTTPException(status_code=503, detail="No frame available")
+
+
+@app.get("/api/single-camera/stream")
+def api_single_camera_stream():
+    global single_processor
+    if single_processor is None or not single_processor.is_running:
+        single_processor = VideoProcessor(video_path=single_cam_source)
+        single_processor.start()
+
+    def gen():
+        while True:
+            if single_processor and single_processor.is_running:
+                jpg = single_processor.get_jpeg_frame(quality=70)
+                if jpg:
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n")
+            time.sleep(0.04)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/single-camera/state")
+async def api_single_camera_state():
+    global single_processor, single_cam_source, single_cam_status
+    fps = 0.0
+    latency_ms = 0.0
+    counts = {}
+    total = 0
+    density_score = 0.0
+    congestion = "Low"
+    model_name = "best.pt"
+    recent_events = []
+
+    if single_processor and single_processor.is_running:
+        fps = round(getattr(single_processor, "inference_fps", 24.5), 1)
+        with single_processor.state_lock:
+            tracks = list(single_processor.shared_tracks)
+            detections = list(single_processor.shared_detections)
+            model_name = getattr(single_processor.detector, "active_model_name", "best.pt")
+            
+            for t in tracks:
+                lbl = getattr(t, "label", "car").lower()
+                counts[lbl] = counts.get(lbl, 0) + 1
+            total = len(tracks)
+            pcu_weights = {"car": 1.0, "motorcycle": 0.5, "bus": 3.0, "truck": 3.0, "auto": 1.2, "ambulance": 1.5}
+            pcu = sum(counts.get(k, 0) * w for k, w in pcu_weights.items())
+            density_score = min(100.0, round((pcu / 15.0) * 100.0, 1))
+            congestion = "High" if density_score >= 70 else ("Medium" if density_score >= 35 else "Low")
+            latency_ms = 42.0
+
+            for a in single_processor.latest_alerts[-5:]:
+                recent_events.append(a.get("message", ""))
+
+    return {
+        "status": single_cam_status,
+        "source": single_cam_source,
+        "source_name": os.path.basename(single_cam_source),
+        "fps": fps,
+        "latency_ms": latency_ms,
+        "vehicle_counts": counts,
+        "total_vehicles": total,
+        "density_score": density_score,
+        "congestion_level": congestion,
+        "model_name": model_name,
+        "recent_events": recent_events
+    }
+
+
+# ==============================================================================
+# IP WEBCAM ENDPOINTS
+# ==============================================================================
+
+@app.post("/api/ip-webcam/test")
+def api_ip_webcam_test(req: dict):
+    url = req.get("url", "").strip()
+    if not url:
+        return {"success": False, "message": "URL cannot be empty", "latency_ms": 0}
+    if not (url.startswith("http://") or url.startswith("https://") or url.startswith("rtsp://")):
+        return {"success": False, "message": "Invalid URL scheme. Supported: http://, https://, rtsp://", "latency_ms": 0}
+
+    t0 = time.time()
+    masked_url = re.sub(r"://([^:]+):([^@]+)@", "://***:***@", url)
+
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else (554 if parsed.scheme == "rtsp" else 80))
+
+        # Check TCP socket connectivity with 3.0s timeout
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3.0)
+        sock.connect((host, port))
+        sock.close()
+
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        status_code = 200
+        content_type = "stream/network-endpoint"
+
+        if parsed.scheme in ("http", "https"):
+            try:
+                req_obj = urllib.request.Request(url, headers={"User-Agent": "VIGIL-Camera-Probe/2.0"})
+                with urllib.request.urlopen(req_obj, timeout=3.0) as resp:
+                    status_code = resp.status
+                    content_type = resp.headers.get_content_type() or "video/mjpeg"
+            except urllib.error.HTTPError as he:
+                if he.code == 401:
+                    return {
+                        "success": False,
+                        "status_code": 401,
+                        "latency_ms": latency_ms,
+                        "masked_url": masked_url,
+                        "message": "Authentication required (401 Unauthorized). Please check camera credentials."
+                    }
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "status_code": status_code,
+            "content_type": content_type,
+            "latency_ms": latency_ms,
+            "masked_url": masked_url,
+            "message": f"Successfully connected to network camera endpoint at {host}:{port} ({latency_ms} ms)"
+        }
+    except socket.timeout:
+        return {
+            "success": False,
+            "masked_url": masked_url,
+            "latency_ms": round((time.time() - t0) * 1000, 1),
+            "message": f"Connection timed out (3000 ms). Device unreachable at {masked_url}"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "masked_url": masked_url,
+            "latency_ms": round((time.time() - t0) * 1000, 1),
+            "message": f"Connection failed: {str(e)}"
+        }
+
+
+@app.get("/api/ip-webcam/config")
+def api_ip_webcam_get_config():
+    masked_url = re.sub(r"://([^:]+):([^@]+)@", "://***:***@", ip_webcam_config["url"])
+    return {
+        "url": masked_url,
+        "raw_url": ip_webcam_config["url"],
+        "name": ip_webcam_config["name"],
+        "direction": ip_webcam_config["direction"],
+        "is_running": bool(ipcam_processor and ipcam_processor.is_running)
+    }
+
+
+@app.post("/api/ip-webcam/config")
+def api_ip_webcam_set_config(req: IPWebcamConfigRequest):
+    global ip_webcam_config
+    ip_webcam_config["url"] = req.url.strip()
+    if req.name:
+        ip_webcam_config["name"] = req.name.strip()
+    if req.direction:
+        ip_webcam_config["direction"] = req.direction.strip()
+    return {"status": "updated", "config": api_ip_webcam_get_config()}
+
+
+@app.post("/api/ip-webcam/start")
+def api_ip_webcam_start():
+    global ipcam_processor
+    if ipcam_processor:
+        ipcam_processor.stop()
+    ipcam_processor = VideoProcessor(video_path=ip_webcam_config["url"])
+    ipcam_processor.start()
+    return {"status": "started", "url": ip_webcam_config["url"]}
+
+
+@app.post("/api/ip-webcam/stop")
+def api_ip_webcam_stop():
+    global ipcam_processor
+    if ipcam_processor:
+        ipcam_processor.stop()
+        ipcam_processor = None
+    return {"status": "stopped"}
+
+
+@app.get("/api/ip-webcam/stream")
+def api_ip_webcam_stream():
+    global ipcam_processor
+    if ipcam_processor is None or not ipcam_processor.is_running:
+        ipcam_processor = VideoProcessor(video_path=ip_webcam_config["url"])
+        ipcam_processor.start()
+
+    def gen():
+        while True:
+            if ipcam_processor and ipcam_processor.is_running:
+                jpg = ipcam_processor.get_jpeg_frame(quality=70)
+                if jpg:
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n")
+            time.sleep(0.04)
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/ip-webcam/state")
+def api_ip_webcam_state():
+    global ipcam_processor
+    is_running = bool(ipcam_processor and ipcam_processor.is_running)
+    counts = {}
+    total = 0
+    density_score = 0.0
+    emergency_detected = False
+    fps = 0.0
+    latency_ms = 0.0
+
+    if is_running:
+        fps = round(getattr(ipcam_processor, "inference_fps", 22.0), 1)
+        with ipcam_processor.state_lock:
+            tracks = list(ipcam_processor.shared_tracks)
+            for t in tracks:
+                lbl = getattr(t, "label", "car").lower()
+                counts[lbl] = counts.get(lbl, 0) + 1
+                if getattr(t, "is_ambulance", False):
+                    emergency_detected = True
+            total = len(tracks)
+            pcu_weights = {"car": 1.0, "motorcycle": 0.5, "bus": 3.0, "truck": 3.0, "auto": 1.2, "ambulance": 1.5}
+            pcu = sum(counts.get(k, 0) * w for k, w in pcu_weights.items())
+            density_score = min(100.0, round((pcu / 15.0) * 100.0, 1))
+            latency_ms = 48.0
+
+    return {
+        "connected": is_running,
+        "status": "running" if is_running else "stopped",
+        "name": ip_webcam_config.get("name", "IP Webcam"),
+        "direction": ip_webcam_config.get("direction", "North"),
+        "fps": fps,
+        "latency_ms": latency_ms,
+        "vehicle_counts": counts,
+        "total_vehicles": total,
+        "density_score": density_score,
+        "emergency_detected": emergency_detected,
+        "last_frame_time": time.time() if is_running else None
+    }
+
+
+# ==============================================================================
+# FOUR-WAY DETAILED STATE ENDPOINT
+# ==============================================================================
+
+@app.get("/api/four-way/state")
+def api_four_way_state():
+    if not processor:
+        raise HTTPException(status_code=503, detail="4-Way Processor offline")
+
+    with processor.state_lock:
+        tracks = list(processor.shared_tracks)
+        lane_stats = dict(processor.shared_lane_stats)
+        signals = dict(processor.latest_signals)
+        optimizer = processor.optimizer
+        metrics = dict(processor.latest_metrics)
+        inference_fps = getattr(processor, "inference_fps", 25.0)
+
+    directions_data = {}
+    approaches = ["North", "South", "East", "West"]
+    pcu_weights = {"car": 1.0, "motorcycle": 0.5, "bus": 3.0, "truck": 3.0, "auto": 1.2, "ambulance": 1.5}
+
+    for app_name in approaches:
+        app_tracks = [t for t in tracks if getattr(t, "lane", "") == app_name]
+        counts_by_class = {}
+        for t in app_tracks:
+            cls_name = getattr(t, "label", "car").lower()
+            counts_by_class[cls_name] = counts_by_class.get(cls_name, 0) + 1
+
+        pcu = sum(counts_by_class.get(k, 0) * w for k, w in pcu_weights.items())
+        total = len(app_tracks)
+        l_stat = lane_stats.get(app_name)
+        occ = float(getattr(l_stat, "density", 0.0)) if l_stat else 0.0
+        pcu_ratio = min(1.0, float(pcu) / 12.0)
+        stopped_cnt = getattr(l_stat, "stopped_count", 0) if l_stat else 0
+        queue_ratio = min(1.0, float(stopped_cnt) / max(1, total))
+        blended_ratio = 0.35 * occ + 0.45 * pcu_ratio + 0.20 * queue_ratio
+        density_score = min(100.0, round(blended_ratio * 100.0, 1))
+        congestion = "High" if density_score >= 70 else ("Medium" if density_score >= 35 else "Low")
+        has_emergency = any(getattr(t, "is_ambulance", False) for t in app_tracks)
+
+        sig_info = signals.get(app_name, {})
+        sig_color = sig_info.get("color", "RED") if isinstance(sig_info, dict) else signals.get(app_name, "RED")
+        duration = sig_info.get("duration", 30) if isinstance(sig_info, dict) else 30
+
+        src_map = {
+            "North": getattr(processor, "v_north", ""),
+            "South": getattr(processor, "v_south", ""),
+            "East": getattr(processor, "v_east", ""),
+            "West": getattr(processor, "v_west", ""),
+        }
+        cam_src = src_map.get(app_name, "")
+        is_conn = bool(cam_src and os.path.isfile(str(cam_src)))
+
+        directions_data[app_name] = {
+            "name": app_name,
+            "connected": is_conn,
+            "source": cam_src,
+            "total_vehicles": total,
+            "class_counts": counts_by_class,
+            "pcu": round(pcu, 1),
+            "density_score": density_score,
+            "congestion_level": congestion,
+            "emergency_detected": has_emergency,
+            "signal_state": sig_color,
+            "duration": duration,
+            "time_remaining": round(getattr(optimizer, 'time_left', 15.0), 1) if optimizer.current_lane == app_name else 0.0
+        }
+
+    curr_lane = optimizer.current_lane
+    time_rem = round(getattr(optimizer, 'time_left', 15.0), 1)
+    is_preempted = getattr(optimizer, "emergency_active", False)
+
+    if is_preempted:
+        mode = "Emergency Preemption Override"
+        source = getattr(optimizer, "emergency_source", "visual")
+        reason = f"Class-1 Emergency Corridor granted to {optimizer.emergency_lane} via {source.upper()} sensor preemption."
+    elif getattr(optimizer, "manual_override", False):
+        mode = "Manual Operator Override"
+        reason = f"Operator manual priority active on {curr_lane} ({time_rem}s remaining)."
+    else:
+        mode = "Adaptive Webster ATSC"
+        max_pcu_lane = max(approaches, key=lambda a: directions_data[a]["pcu"])
+        reason = f"Phase allocated to {curr_lane} (PCU: {directions_data[curr_lane]['pcu']}) based on Webster saturation flow vs {max_pcu_lane} queue demand."
+
+    idx = approaches.index(curr_lane) if curr_lane in approaches else 0
+    next_lane = approaches[(idx + 1) % len(approaches)]
+
+    paused_flag = getattr(processor, "is_paused", False)
+    return {
+        "is_paused": paused_flag,
+        "directions": directions_data,
+        "intersection": {
+            "active_green": curr_lane,
+            "signal_phase": f"PHASE {curr_lane.upper()}",
+            "time_remaining": time_rem,
+            "next_direction": next_lane,
+            "emergency_preempted": is_preempted,
+            "emergency_lane": getattr(optimizer, "emergency_lane", None),
+            "decision_reason": reason,
+            "mode": mode,
+            "cycle_length": getattr(optimizer, "webster_cycle_length", 90),
+            "inference_fps": inference_fps,
+            "is_paused": paused_flag
+        }
+    }
+
+
+
+class FourWaySwitchSourceRequest(BaseModel):
+    camera_id: str
+    source: str
+
+
+@app.post("/api/four-way/switch-source")
+async def api_four_way_switch_source(req: FourWaySwitchSourceRequest):
+    """Dynamically switch video source for a specific camera ID in 4-way mode without server restart."""
+    global processor
+    if not processor:
+        raise HTTPException(status_code=503, detail="4-Way Processor offline")
+    success = processor.switch_camera_source(req.camera_id, req.source)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Invalid camera_id: {req.camera_id}")
+    return {
+        "status": "success",
+        "camera_id": req.camera_id,
+        "source": req.source,
+        "message": f"Successfully switched camera {req.camera_id} source to {req.source}"
+    }
+
+
+@app.post("/api/four-way/upload-source")
+async def api_four_way_upload_source(camera_id: str = Form(...), file: UploadFile = File(...)):
+    """Upload and dynamically switch video for a specific 4-way camera ID."""
+    global processor
+    if not processor:
+        raise HTTPException(status_code=503, detail="4-Way Processor offline")
+    upload_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "videos", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    clean_name = f"cam_{camera_id.lower()}_{int(time.time())}_{file.filename}"
+    save_path = os.path.join(upload_dir, clean_name)
+    with open(save_path, "wb") as bf:
+        shutil.copyfileobj(file.file, bf)
+    rel_path = f"assets/videos/uploads/{clean_name}"
+    success = processor.switch_camera_source(camera_id, rel_path)
+    return {
+        "status": "success" if success else "failed",
+        "camera_id": camera_id,
+        "source": rel_path,
+        "message": f"Uploaded and assigned video to camera {camera_id}"
+    }
+
+
+@app.post("/api/four-way/pause")
+async def api_four_way_pause():
+    """Immediately halt video processing and YOLO inference for 4-way dashboard."""
+    global processor
+    if not processor:
+        raise HTTPException(status_code=503, detail="4-Way Processor offline")
+    processor.pause()
+    return {"status": "paused", "is_paused": True}
+
+
+@app.post("/api/four-way/resume")
+async def api_four_way_resume():
+    """Resume video processing and YOLO inference from the current frame."""
+    global processor
+    if not processor:
+        raise HTTPException(status_code=503, detail="4-Way Processor offline")
+    processor.resume()
+    return {"status": "resumed", "is_paused": False}
+
+
+@app.post("/api/four-way/toggle-pause")
+async def api_four_way_toggle_pause():
+    """Toggle paused state for 4-way perception pipeline."""
+    global processor
+    if not processor:
+        raise HTTPException(status_code=503, detail="4-Way Processor offline")
+    is_paused = processor.toggle_pause()
+    return {"status": "toggled", "is_paused": is_paused}

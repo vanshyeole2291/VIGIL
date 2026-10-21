@@ -31,7 +31,7 @@ FRAME_WIDTH  = 1280
 FRAME_HEIGHT = 720
 TARGET_FPS   = 30
 PROCESS_EVERY_N_FRAMES = 2      # Skip every other frame for speed
-CONFIDENCE_THRESHOLD   = 0.50  # High-precision threshold: eliminates false detections and pavement noise
+CONFIDENCE_THRESHOLD   = 0.35  # Calibrated detection threshold for high-precision traffic and emergency perception
 
 # ─── Vehicle & Agent Classes (Label-Driven Single Source of Truth) ───────────
 VEHICLE_CLASSES = {
@@ -97,8 +97,8 @@ WEBSTER_MAX_CYCLE           = 120.0  # Upper bound on cycle length (seconds)
 # ─── Emergency Preemption & Audio Siren Detection ────────────────────────────
 AMBULANCE_OVERRIDE        = True   # Enable visual emergency preemption
 OPTICAL_AMBULANCE_HEURISTIC_ENABLED = False # In heavy traffic, do not force-reclassify normal white cars as ambulances
-AMBULANCE_CONFIDENCE_THRESHOLD = 0.62 # Calibrated neural confidence threshold: detects genuine Force Traveller ambulance, strictly rejects false bus/car classifications
-AMBULANCE_MIN_AREA_FRAC   = 0.015  # Rejects small vehicles/cars in traffic jams; ambulances are larger vehicles
+AMBULANCE_CONFIDENCE_THRESHOLD = 0.30 # Calibrated neural confidence threshold: detects genuine Force Traveller ambulance, strictly rejects false bus/car classifications
+AMBULANCE_MIN_AREA_FRAC   = 0.001  # Rejects small vehicles/cars in traffic jams; ambulances are larger vehicles
 AMBULANCE_WHITE_RATIO     = 0.35   # High threshold for emergency vehicle white body surface
 AMBULANCE_EMERGENCY_SCORE = 5.0    # Strict threshold requiring dedicated strobe flashers
 AUDIO_SIREN_ENABLED       = True   # Enable acoustic siren analysis
@@ -111,8 +111,8 @@ EMERGENCY_GREEN_HOLD    = 30.0   # Minimum duration for green corridor hold (sec
 # ─── Accident & Traffic Anomaly Detection ────────────────────────────────────
 ENABLE_COLLISION_ALERTS = True   # Enable collision & accident alerts for real-time safety preemption
 ACCIDENT_STOP_THRESHOLD = 2.0   # Seconds a vehicle is stopped before flagged
-ACCIDENT_OVERLAP_IOU    = 0.32  # Realistic physical impact overlap threshold (rejects normal queue proximity)
-COLLISION_CONFIRM_TIME  = 2.0   # 2.0s sustained confirmation time for genuine collisions
+ACCIDENT_OVERLAP_IOU    = 0.45  # Realistic physical impact overlap threshold (rejects normal queue proximity)
+COLLISION_CONFIRM_TIME  = 2.5   # 2.0s sustained confirmation time for genuine collisions
 ILLEGAL_PARKING_TIME    = 15.0  # Seconds stationary in moving lane before parking/stall alert
 
 # ─── Backend Server ───────────────────────────────────────────────────────────

@@ -10,28 +10,68 @@ export default function Sidebar({
 }) {
   const navItems = [
     {
-      id: 'main-command-hub',
-      label: 'Main Command Hub',
+      id: 'command-center',
+      label: 'Command Center',
       icon: 'dashboard',
       tag: 'OVERVIEW',
+      badgeColor: 'border-cyan-500/30 text-cyan-400 bg-cyan-950/40',
     },
     {
-      id: '4-way-ai-perception',
-      label: '4-Way AI Perception',
+      id: 'single-camera',
+      label: 'Single Camera',
+      icon: 'videocam',
+      tag: 'FEED 1',
+      badgeColor: 'border-blue-500/30 text-blue-400 bg-blue-950/40',
+    },
+    {
+      id: 'four-way',
+      label: 'Four-Way Intersection',
       icon: 'grid_view',
-      tag: '4-CAM AI',
+      tag: '4-WAY',
+      badgeColor: 'border-emerald-500/30 text-emerald-400 bg-emerald-950/40',
     },
     {
-      id: 'detection-scanner',
-      label: 'Detection Matrix & Radar',
-      icon: 'radar',
-      tag: 'AI RADAR',
+      id: 'ip-webcam',
+      label: 'IP Webcam',
+      icon: 'linked_camera',
+      tag: 'RTSP/IP',
+      badgeColor: 'border-teal-500/30 text-teal-400 bg-teal-950/40',
     },
     {
-      id: 'incidents',
-      label: 'Incident Monitor',
-      icon: 'warning',
+      id: 'accidents',
+      label: 'Accident & Incident Feed',
+      icon: 'car_crash',
       tag: 'INCIDENTS',
+      badgeColor: 'border-red-500/30 text-red-400 bg-red-950/40',
+    },
+    {
+      id: 'evidence',
+      label: 'Evidence Database',
+      icon: 'folder_data',
+      tag: 'SHA-256',
+      badgeColor: 'border-amber-500/30 text-amber-400 bg-amber-950/40',
+    },
+    {
+      id: 'analytics',
+      label: 'Traffic Analytics',
+      icon: 'monitoring',
+      tag: 'PCU/FPS',
+      badgeColor: 'border-indigo-500/30 text-indigo-400 bg-indigo-950/40',
+    },
+    {
+      id: 'violence-coming-soon',
+      label: 'Violence Detection',
+      icon: 'shield',
+      tag: 'MODULE 2',
+      badgeText: 'Soon',
+      badgeColor: 'border-purple-500/30 text-purple-400 bg-purple-950/40',
+    },
+    {
+      id: 'system-health',
+      label: 'System Health & Settings',
+      icon: 'settings',
+      tag: 'HARDWARE',
+      badgeColor: 'border-slate-500/30 text-slate-400 bg-slate-900/60',
     },
   ];
 
@@ -48,23 +88,28 @@ export default function Sidebar({
       <aside
         className={`fixed left-0 top-0 h-full ${
           collapsed ? 'lg:w-16' : 'lg:w-64'
-        } w-64 bg-surface-dim z-50 flex flex-col border-r border-outline-variant/30 shadow-2xl transition-all duration-300 ${
+        } w-64 bg-[#0B101D] z-50 flex flex-col border-r border-slate-800 shadow-2xl transition-all duration-300 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
         {/* Top Brand Header */}
-        <div className="h-16 px-space-md flex items-center justify-between border-b border-outline-variant/20 bg-surface-container-lowest/80">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-surface-container-high border border-outline-variant/40 flex items-center justify-center shrink-0 shadow-sm">
-              <span className="material-symbols-outlined text-primary text-[20px]">videocam</span>
+        <div className="h-16 px-4 flex items-center justify-between border-b border-slate-800 bg-[#090D18]">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-600 to-blue-700 border border-cyan-400/30 flex items-center justify-center shrink-0 shadow-lg shadow-cyan-900/30">
+              <span className="material-symbols-outlined text-white text-[20px]">traffic</span>
             </div>
             {!collapsed && (
               <div className="truncate">
-                <span className="font-headline text-[14px] font-extrabold text-on-surface tracking-tight block">
-                  UK-ITCS
-                </span>
-                <span className="font-mono text-[9px] text-on-surface-variant block tracking-wider font-semibold">
-                  AI VISION SUITE
+                <div className="flex items-center gap-1.5">
+                  <span className="font-extrabold text-[15px] text-white tracking-wider block font-headline">
+                    VIGIL
+                  </span>
+                  <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-bold">
+                    v2.0
+                  </span>
+                </div>
+                <span className="font-mono text-[9px] text-slate-400 block tracking-wider font-semibold">
+                  INDIAN ITMS & ROAD SAFETY
                 </span>
               </div>
             )}
@@ -72,17 +117,17 @@ export default function Sidebar({
 
           {!collapsed ? (
             <div className="flex items-center gap-1.5 shrink-0">
-              <div className="flex items-center gap-1.5 bg-secondary-container/20 px-2 py-0.5 rounded-full border border-secondary/30">
+              <div className="flex items-center gap-1.5 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-500/30">
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-secondary"></span>
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                 </span>
-                <span className="font-mono text-[10px] text-secondary font-bold uppercase">LIVE</span>
+                <span className="font-mono text-[9px] text-emerald-400 font-bold uppercase tracking-wider">LIVE</span>
               </div>
               {onToggleCollapse && (
                 <button
                   onClick={onToggleCollapse}
-                  className="hidden lg:flex p-1 rounded-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors ml-1"
+                  className="hidden lg:flex p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ml-1"
                   title="Collapse Menu"
                 >
                   <span className="material-symbols-outlined text-[18px]">chevron_left</span>
@@ -93,7 +138,7 @@ export default function Sidebar({
             onToggleCollapse && (
               <button
                 onClick={onToggleCollapse}
-                className="hidden lg:flex p-1 rounded-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors mx-auto"
+                className="hidden lg:flex p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors mx-auto"
                 title="Expand Menu"
               >
                 <span className="material-symbols-outlined text-[18px]">chevron_right</span>
@@ -102,91 +147,78 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Surveillance Grid Status Chip */}
+        {/* Operational Context Chip */}
         {!collapsed && (
-          <div className="px-space-md py-space-sm bg-surface-container-low/50 border-b border-outline-variant/20">
-            <div className="flex items-center justify-between text-on-surface-variant">
-              <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">SURVEILLANCE GRID</span>
-              <span className="font-mono text-[10px] text-secondary bg-secondary-container/20 px-1.5 py-0.5 rounded font-semibold border border-secondary/30">
-                CALIBRATED
+          <div className="px-4 py-2.5 bg-[#0D1424] border-b border-slate-800/80">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="font-mono text-[9px] uppercase tracking-wider font-semibold">URBAN CORRIDOR</span>
+              <span className="font-mono text-[9px] text-cyan-400 bg-cyan-950/50 px-1.5 py-0.2 rounded font-semibold border border-cyan-800/50">
+                ATSC ACTIVE
               </span>
             </div>
             <div className="mt-1 flex items-center justify-between">
-              <span className="text-[12px] text-on-surface font-medium">CAMERA ARRAYS</span>
-              <span className="font-mono text-[11px] text-primary font-bold">4 / 4 RTSP</span>
+              <span className="text-[11px] text-slate-300 font-medium">Junction 04 — Quad Array</span>
+              <span className="font-mono text-[10px] text-emerald-400 font-bold">4 Feeds Sync</span>
             </div>
           </div>
         )}
 
-        {/* Navigation Links */}
-        <nav className="flex-1 px-space-sm py-space-md space-y-1.5 overflow-y-auto">
-          {!collapsed && (
-            <div className="px-space-sm pb-1 font-mono text-[10px] uppercase text-on-surface-variant tracking-wider font-semibold">
-              COMMAND VIEWS
-            </div>
-          )}
-
+        {/* Navigation Items List */}
+        <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-1">
           {navItems.map((item) => {
-            const isActive = currentView === item.id;
+            const isActive = currentView === item.id || (item.id === 'command-center' && currentView === 'main-command-hub');
             return (
               <button
                 key={item.id}
-                onClick={() => setCurrentView(item.id)}
-                title={collapsed ? item.label : undefined}
-                className={`w-full flex items-center ${
-                  collapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-space-md py-2.5'
-                } rounded-lg text-left transition-all duration-150 ${
+                onClick={() => {
+                  setCurrentView(item.id);
+                  if (onClose) onClose();
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
                   isActive
-                    ? 'bg-surface-container-high text-primary font-semibold shadow-sm border border-primary/20'
-                    : 'text-on-surface-variant hover:bg-surface-container-high/60 hover:text-on-surface'
+                    ? 'bg-cyan-950/50 text-cyan-300 border border-cyan-500/40 font-semibold shadow-inner shadow-cyan-950'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
+                title={collapsed ? item.label : undefined}
               >
-                <div className={`flex items-center ${collapsed ? '' : 'gap-space-sm'}`}>
-                  <span
-                    className={`material-symbols-outlined text-[20px] ${
-                      isActive ? 'text-primary' : 'text-on-surface-variant'
-                    }`}
-                  >
-                    {item.icon}
-                  </span>
-                  {!collapsed && <span className="text-[13px]">{item.label}</span>}
-                </div>
+                <span
+                  className={`material-symbols-outlined text-[20px] shrink-0 ${
+                    isActive ? 'text-cyan-400' : 'text-slate-500 group-hover:text-slate-300'
+                  }`}
+                >
+                  {item.icon}
+                </span>
+
                 {!collapsed && (
-                  <span
-                    className={`font-mono text-[9px] px-1.5 py-0.5 rounded font-bold ${
-                      isActive
-                        ? 'bg-primary/20 text-primary border border-primary/30'
-                        : 'bg-surface-container text-on-surface-variant/70'
-                    }`}
-                  >
-                    {item.tag}
-                  </span>
+                  <div className="flex-1 flex items-center justify-between truncate min-w-0">
+                    <span className="text-[13px] truncate">{item.label}</span>
+                    {item.badgeText ? (
+                      <span className="ml-1.5 text-[9px] font-mono px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-500/40 uppercase font-bold">
+                        {item.badgeText}
+                      </span>
+                    ) : item.tag ? (
+                      <span className={`ml-1.5 text-[9px] font-mono px-1.5 py-0.2 rounded border font-semibold ${item.badgeColor}`}>
+                        {item.tag}
+                      </span>
+                    ) : null}
+                  </div>
                 )}
               </button>
             );
           })}
         </nav>
 
-        {/* Real Edge Inference Model Status Card */}
-        {!collapsed ? (
-          <div className="p-space-sm bg-surface-container-lowest/90 border-t border-outline-variant/20">
-            <div className="p-space-sm rounded-lg bg-surface-container-low border border-outline-variant/30 flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] text-on-surface-variant font-semibold">YOLOv8 EDGE AI</span>
-                <span className="font-mono text-[10px] text-secondary font-bold">ONLINE</span>
-              </div>
-              <div className="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-                <div className="bg-secondary h-full w-[90%] shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
-              </div>
-              <div className="flex items-center justify-between text-on-surface-variant pt-0.5">
-                <span className="font-mono text-[10px]">4-WAY INTERSECTION</span>
-                <span className="font-mono text-[10px] text-primary font-bold">~25 FPS LIVE</span>
-              </div>
+        {/* Footer Hardware & Engine Info */}
+        {!collapsed && (
+          <div className="p-3 border-t border-slate-800 bg-[#090D18]">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span className="text-[10px] font-mono font-bold text-slate-300">GPU ACCELERATED</span>
             </div>
-          </div>
-        ) : (
-          <div className="p-2 border-t border-outline-variant/20 flex justify-center" title="Edge AI: YOLOv8 Active">
-            <span className="w-2.5 h-2.5 rounded-full bg-secondary shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+            <div className="text-[10px] text-slate-400 font-mono flex justify-between">
+              <span>RTX 4050 6GB</span>
+              <span className="text-cyan-400">YOLOv8 v12</span>
+            </div>
           </div>
         )}
       </aside>

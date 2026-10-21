@@ -54,3 +54,13 @@ best/
 scratch_*.jpg
 
 /assets/
+
+# Database & Runtime Generated Evidence
+vigil.db
+evidence/videos/*
+!evidence/videos/.gitkeep
+evidence/images/*
+!evidence/images/.gitkeep
+test_*.mp4
+test_*.jpg
+crop_*.jpg

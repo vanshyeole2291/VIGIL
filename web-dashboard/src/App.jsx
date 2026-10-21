@@ -2,12 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import TopNavbar from './components/TopNavbar';
 import MainCommandHubView from './components/MainCommandHubView';
+import SingleCameraView from './components/SingleCameraView';
 import FourWayPerceptionView from './components/FourWayPerceptionView';
-import DetectionScannerView from './components/DetectionScannerView';
-import IncidentMonitor from './components/IncidentMonitor';
+import IPWebcamView from './components/IPWebcamView';
+import AccidentIncidentFeedView from './components/AccidentIncidentFeedView';
+import EvidenceDatabaseView from './components/EvidenceDatabaseView';
+import TrafficAnalyticsView from './components/TrafficAnalyticsView';
+import ViolenceDetectionView from './components/ViolenceDetectionView';
+import SystemHealthView from './components/SystemHealthView';
 
 function App() {
-  const [currentView, setCurrentView] = useState('main-command-hub');
+  const [currentView, setCurrentView] = useState('command-center');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -39,6 +44,47 @@ function App() {
   });
 
   const [isConnected, setIsConnected] = useState(false);
+  const [activePopup, setActivePopup] = useState(null);
+  const seenIncidentIds = useRef(new Set());
+  const popupTimer = useRef(null);
+
+  // Poll for real-time critical incidents to surface on-screen alert popup
+  useEffect(() => {
+    let isMounted = true;
+    const checkLatestIncident = async () => {
+      try {
+        const res = await fetch('/api/incidents');
+        if (!res.ok) return;
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 0 && isMounted) {
+          const latest = list[0];
+          // On initialization, mark existing history so only fresh events trigger popups
+          if (seenIncidentIds.current.size === 0) {
+            list.forEach((item) => seenIncidentIds.current.add(item.id));
+            return;
+          }
+          if (!seenIncidentIds.current.has(latest.id)) {
+            seenIncidentIds.current.add(latest.id);
+            setActivePopup(latest);
+            if (popupTimer.current) clearTimeout(popupTimer.current);
+            popupTimer.current = setTimeout(() => {
+              if (isMounted) setActivePopup(null);
+            }, 9000);
+          }
+        }
+      } catch (e) {
+        // silent catch
+      }
+    };
+
+    checkLatestIncident();
+    const interval = setInterval(checkLatestIncident, 2500);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      if (popupTimer.current) clearTimeout(popupTimer.current);
+    };
+  }, []);
 
   // WebSocket Live Connection to Backend
   useEffect(() => {
@@ -104,7 +150,7 @@ function App() {
 
   const handleTriggerEmergency = async (lane) => {
     try {
-      await fetch('/api/emergency', {
+      await fetch('/api/trigger-emergency', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lane: lane || 'North' }),
@@ -117,7 +163,7 @@ function App() {
   const isEmergency = state.signals?.emergency_active || false;
 
   return (
-    <div className="bg-surface font-body text-on-surface min-h-screen selection:bg-primary-container selection:text-on-primary-container">
+    <div className="bg-[#080B14] font-body text-slate-100 min-h-screen selection:bg-cyan-500/30 selection:text-cyan-300">
       {/* 1. Left Navigation Sidebar */}
       <Sidebar
         currentView={currentView}
@@ -149,9 +195,9 @@ function App() {
         />
 
         {/* Main View Port */}
-        <main className="w-full pt-20 pb-12 bg-surface px-4 sm:px-6 flex-1 overflow-y-auto">
-          {/* View 1: Main Command Hub */}
-          {(currentView === 'main-command-hub' || currentView === 'dashboard') && (
+        <main className="w-full pt-20 pb-12 bg-[#080B14] px-4 sm:px-6 flex-1 overflow-y-auto">
+          {/* View 1: Command Center */}
+          {(currentView === 'command-center' || currentView === 'main-command-hub' || currentView === 'dashboard') && (
             <MainCommandHubView
               onSwitchView={(viewId) => setCurrentView(viewId)}
               metrics={state.metrics}
@@ -161,30 +207,90 @@ function App() {
             />
           )}
 
-          {/* View 2: 4-Way AI Perception */}
-          {currentView === '4-way-ai-perception' && (
+          {/* View 2: Single Camera */}
+          {currentView === 'single-camera' && (
+            <SingleCameraView />
+          )}
+
+          {/* View 3: Four-Way Intersection */}
+          {(currentView === 'four-way' || currentView === '4-way-ai-perception') && (
             <FourWayPerceptionView
               onSwitchView={(viewId) => setCurrentView(viewId)}
-              signals={state.signals}
-              emergencyActive={isEmergency}
             />
           )}
 
-          {/* View 3: Detection Matrix & Radar */}
-          {currentView === 'detection-scanner' && (
-            <DetectionScannerView
-              activeTargets={state.active_targets || []}
-              audioSiren={state.audio_siren || {}}
-              metrics={state.metrics || {}}
-            />
+          {/* View 4: IP Webcam */}
+          {currentView === 'ip-webcam' && (
+            <IPWebcamView />
           )}
 
-          {/* View 4: Incident Feed */}
-          {currentView === 'incidents' && (
-            <IncidentMonitor />
+          {/* View 5: Accident & Incident Feed */}
+          {(currentView === 'accidents' || currentView === 'incidents') && (
+            <AccidentIncidentFeedView />
+          )}
+
+          {/* View 6: Evidence Database */}
+          {currentView === 'evidence' && (
+            <EvidenceDatabaseView />
+          )}
+
+          {/* View 7: Traffic Analytics */}
+          {currentView === 'analytics' && (
+            <TrafficAnalyticsView />
+          )}
+
+          {/* View 8: Violence Detection — Coming Soon */}
+          {currentView === 'violence-coming-soon' && (
+            <ViolenceDetectionView />
+          )}
+
+          {/* View 9: System Health & Settings */}
+          {currentView === 'system-health' && (
+            <SystemHealthView />
           )}
         </main>
       </div>
+
+      {/* 3. Sleek Compact Top Incident Alert Notification */}
+      {activePopup && (
+        <div className="fixed top-3 right-5 z-50 max-w-sm sm:max-w-md w-full bg-[#0D1424]/95 border border-red-500/80 rounded-xl shadow-xl shadow-red-950/60 p-2.5 animate-in fade-in slide-in-from-top-3 duration-200 backdrop-blur-md flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-red-400 animate-ping shrink-0"></span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 leading-tight">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wide text-red-400 shrink-0">
+                  {activePopup.type === 'ambulance' ? '🚑 Ambulance' : '🚨 Collision'}
+                </span>
+                <span className="text-slate-600">·</span>
+                <span className="text-[10px] font-mono text-cyan-300 font-semibold truncate max-w-[130px]" title={activePopup.camera_id}>
+                  {activePopup.camera_id ? (activePopup.camera_id.startsWith('CCTV:') ? activePopup.camera_id : `CCTV: ${activePopup.camera_id}`) : 'CCTV'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-200 font-medium truncate mt-0.5">
+                {activePopup.description?.replace(/^CCTV:\s*[^—–-]+\s*[—–-]\s*/, '') || activePopup.description}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => {
+                setCurrentView('accidents');
+                setActivePopup(null);
+              }}
+              className="px-2.5 py-1 rounded-lg bg-red-950 hover:bg-red-900 border border-red-500/60 text-red-200 text-[11px] font-semibold transition-colors"
+            >
+              View
+            </button>
+            <button
+              onClick={() => setActivePopup(null)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              title="Dismiss"
+            >
+              <span className="material-symbols-outlined text-sm block">close</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

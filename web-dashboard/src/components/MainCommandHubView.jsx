@@ -7,37 +7,46 @@ export default function MainCommandHubView({
   emergencyActive = false,
   onTriggerEmergency,
 }) {
-  const [recentIncidents, setRecentIncidents] = useState([]);
+  const [healthData, setHealthData] = useState(null);
+  const [accidents, setAccidents] = useState([]);
+  const [fourWayState, setFourWayState] = useState(null);
   const [actionNotice, setActionNotice] = useState(null);
 
-  const currentLane = signals.current_lane || 'North';
-  const currentState = signals.current_state || 'green';
-  const timeLeft = Math.max(0, Math.round(signals.time_left || 15));
+  const currentLane = signals.current_lane || fourWayState?.intersection?.active_green || 'North';
+  const timeLeft = Math.max(0, Math.round(signals.time_left ?? fourWayState?.intersection?.time_remaining ?? 15));
   const totalVehicles = metrics.total_vehicles ?? 16;
   const totalPcu = typeof metrics.total_pcu === 'number' ? metrics.total_pcu.toFixed(1) : '22.0';
 
-  const laneData = [
-    { name: 'North', count: metrics.lanes?.North?.count ?? 4, pcu: metrics.lanes?.North?.pcu ?? 5.5 },
-    { name: 'South', count: metrics.lanes?.South?.count ?? 5, pcu: metrics.lanes?.South?.pcu ?? 7.0 },
-    { name: 'East',  count: metrics.lanes?.East?.count ?? 4,  pcu: metrics.lanes?.East?.pcu ?? 5.5, isCustom4K: true },
-    { name: 'West',  count: metrics.lanes?.West?.count ?? 3,  pcu: metrics.lanes?.West?.pcu ?? 4.0 },
-  ];
-
   useEffect(() => {
     let isMounted = true;
-    const fetchIncidents = async () => {
+
+    const fetchDashboardData = async () => {
       try {
-        const res = await fetch('/api/incidents');
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          setRecentIncidents((data || []).slice(0, 4));
+        const [healthRes, accRes, fourRes] = await Promise.all([
+          fetch('/api/system/health').catch(() => null),
+          fetch('/api/accidents?limit=5').catch(() => null),
+          fetch('/api/four-way/state').catch(() => null),
+        ]);
+
+        if (healthRes && healthRes.ok && isMounted) {
+          const h = await healthRes.json();
+          setHealthData(h);
+        }
+        if (accRes && accRes.ok && isMounted) {
+          const a = await accRes.json();
+          setAccidents(a || []);
+        }
+        if (fourRes && fourRes.ok && isMounted) {
+          const f = await fourRes.json();
+          setFourWayState(f);
         }
       } catch (err) {
-        console.debug('Failed to fetch incidents', err);
+        console.debug('Dashboard data fetch error', err);
       }
     };
-    fetchIncidents();
-    const interval = setInterval(fetchIncidents, 3000);
+
+    fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 3000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -65,337 +74,338 @@ export default function MainCommandHubView({
     }
   };
 
+  const laneData = [
+    { name: 'North', count: fourWayState?.directions?.North?.total_vehicles ?? 4, pcu: fourWayState?.directions?.North?.pcu ?? 5.5, signal: fourWayState?.directions?.North?.signal_state || (currentLane === 'North' ? 'GREEN' : 'RED') },
+    { name: 'South', count: fourWayState?.directions?.South?.total_vehicles ?? 5, pcu: fourWayState?.directions?.South?.pcu ?? 7.0, signal: fourWayState?.directions?.South?.signal_state || (currentLane === 'South' ? 'GREEN' : 'RED') },
+    { name: 'East',  count: fourWayState?.directions?.East?.total_vehicles ?? 4,  pcu: fourWayState?.directions?.East?.pcu ?? 5.5,  signal: fourWayState?.directions?.East?.signal_state || (currentLane === 'East' ? 'GREEN' : 'RED') },
+    { name: 'West',  count: fourWayState?.directions?.West?.total_vehicles ?? 3,  pcu: fourWayState?.directions?.West?.pcu ?? 4.0,  signal: fourWayState?.directions?.West?.signal_state || (currentLane === 'West' ? 'GREEN' : 'RED') },
+  ];
+
+  const activeAccidentsCount = accidents.filter((a) => a.status === 'new').length;
+
   return (
     <div className="flex flex-col w-full gap-5 max-w-7xl mx-auto pb-12">
       {/* Action Notification Banner */}
       {actionNotice && (
-        <div className="p-3 rounded-xl bg-primary-container/30 border border-primary/50 text-on-surface flex items-center justify-between shadow-lg animate-fadeIn">
-          <div className="flex items-center gap-2 font-mono text-xs font-bold text-primary">
+        <div className="p-3 rounded-xl bg-cyan-950/80 border border-cyan-500/50 text-white flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-2 font-mono text-xs font-bold text-cyan-300">
             <span className="material-symbols-outlined text-base">info</span>
             <span>{actionNotice}</span>
           </div>
-          <button onClick={() => setActionNotice(null)} className="text-on-surface-variant hover:text-white">
+          <button onClick={() => setActionNotice(null)} className="text-slate-400 hover:text-white">
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         </div>
       )}
 
       {/* 1. Header Overview Banner */}
-      <section className="bg-surface-container-low/90 backdrop-blur-md rounded-2xl p-5 border border-outline-variant/30 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <section className="bg-[#0D1424] rounded-2xl p-5 border border-slate-800 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse"></span>
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-secondary">
-              Intersection Online · Adaptive ATSC
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-emerald-400">
+              System Online · Intelligent Traffic Management
             </span>
           </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-on-surface tracking-tight">
-            4-Way Intelligent Traffic Hub
+          <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+            VIGIL Operations Command Center
           </h1>
-          <p className="text-xs sm:text-sm text-on-surface-variant mt-0.5">
-            Active Webster method adaptive signal optimization across North, South, East (Custom 4K), and West corridors.
+          <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
+            Real-time Indian traffic density monitoring, Webster ATSC signal optimization, and persistent forensic accident triage.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
           <button
-            onClick={() => onSwitchView && onSwitchView('4-way-ai-perception')}
-            className="px-3.5 py-2 bg-primary hover:bg-primary/90 text-on-primary rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm"
+            onClick={() => onSwitchView('single-camera')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all"
           >
-            <span className="material-symbols-outlined text-[17px]">grid_view</span>
-            <span>Live Cameras</span>
+            <span className="material-symbols-outlined text-base text-cyan-400">videocam</span>
+            <span>Single Cam</span>
           </button>
+
           <button
-            onClick={() => onSwitchView && onSwitchView('detection-scanner')}
-            className="px-3.5 py-2 bg-surface-container hover:bg-surface-container-high text-on-surface border border-outline-variant/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all"
+            onClick={() => onSwitchView('four-way')}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40 text-xs font-semibold shadow-sm transition-all"
           >
-            <span className="material-symbols-outlined text-[17px]">radar</span>
-            <span>Radar & Scanner</span>
+            <span className="material-symbols-outlined text-base">grid_view</span>
+            <span>4-Way ATSC</span>
           </button>
+
           <button
-            onClick={() => onSwitchView && onSwitchView('incidents')}
-            className="px-3.5 py-2 bg-surface-container hover:bg-surface-container-high text-on-surface border border-outline-variant/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all"
+            onClick={() => onSwitchView('ip-webcam')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-all"
           >
-            <span className="material-symbols-outlined text-[17px]">warning</span>
-            <span>Incident Feed</span>
+            <span className="material-symbols-outlined text-base text-teal-400">linked_camera</span>
+            <span>IP Webcam</span>
           </button>
         </div>
       </section>
 
-      {/* 2. Key Executive Metrics Cards (Clean & Verified Real Data) */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Active Phase Card */}
-        <div className="bg-surface-container-low/80 rounded-xl p-4 border border-outline-variant/30 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-on-surface-variant">
-            <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">Active Signal Phase</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse"></span>
+      {/* 2. Key Operational Telemetry KPI Cards */}
+      <section className="grid grid-cols-2 lg:grid-cols-5 gap-3.5">
+        {/* Backend & DB Health */}
+        <div className="p-4 rounded-xl bg-[#0D1424] border border-slate-800 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-400 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">System State</span>
+            <span className="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
           </div>
-          <div className="my-2">
-            <div className="text-xl font-black text-secondary">
-              {currentLane} Approach
+          <div className="text-xl font-bold text-white">
+            {healthData ? (healthData.status === 'healthy' ? 'OPTIMAL' : 'DEGRADED') : 'ONLINE'}
+          </div>
+          <div className="text-[10px] text-slate-400 font-mono mt-1 flex justify-between">
+            <span>DB: {healthData?.database?.type || 'SQLite'}</span>
+            <span className="text-emerald-400">Synced</span>
+          </div>
+        </div>
+
+        {/* Configured Camera Count */}
+        <div className="p-4 rounded-xl bg-[#0D1424] border border-slate-800 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-400 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Cameras Configured</span>
+            <span className="material-symbols-outlined text-cyan-400 text-base">video_camera_front</span>
+          </div>
+          <div className="text-xl font-bold text-white">
+            {healthData?.database?.total_cameras ?? 4} <span className="text-xs font-normal text-slate-400">Sources</span>
+          </div>
+          <div className="text-[10px] text-cyan-400 font-mono mt-1">
+            4-Way Junction Array
+          </div>
+        </div>
+
+        {/* Active Accident Incidents */}
+        <div className="p-4 rounded-xl bg-[#0D1424] border border-slate-800 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-400 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Active Accidents</span>
+            <span className="material-symbols-outlined text-red-400 text-base">car_crash</span>
+          </div>
+          <div className="text-xl font-bold text-red-400">
+            {activeAccidentsCount} <span className="text-xs font-normal text-slate-400">Unresolved</span>
+          </div>
+          <div className="text-[10px] text-slate-400 font-mono mt-1">
+            {accidents.length} total logged in DB
+          </div>
+        </div>
+
+        {/* Emergency Vehicle Priority Status */}
+        <div className={`p-4 rounded-xl border flex flex-col justify-between ${emergencyActive ? 'bg-red-950/40 border-red-500/60' : 'bg-[#0D1424] border-slate-800'}`}>
+          <div className="flex items-center justify-between text-slate-400 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Emergency Preemption</span>
+            <span className={`material-symbols-outlined text-base ${emergencyActive ? 'text-red-400 animate-pulse' : 'text-amber-400'}`}>emergency</span>
+          </div>
+          <div className={`text-xl font-bold ${emergencyActive ? 'text-red-400' : 'text-slate-300'}`}>
+            {emergencyActive ? 'PREEMPTED' : 'STANDBY'}
+          </div>
+          <div className="text-[10px] text-slate-400 font-mono mt-1">
+            {emergencyActive ? `Priority Corridor on ${currentLane}` : 'No active preemption'}
+          </div>
+        </div>
+
+        {/* Total Intersection Demand */}
+        <div className="p-4 rounded-xl bg-[#0D1424] border border-slate-800 flex flex-col justify-between col-span-2 lg:col-span-1">
+          <div className="flex items-center justify-between text-slate-400 mb-2">
+            <span className="text-[11px] font-mono uppercase tracking-wider">Intersection Demand</span>
+            <span className="material-symbols-outlined text-indigo-400 text-base">speed</span>
+          </div>
+          <div className="text-xl font-bold text-white">
+            {totalPcu} <span className="text-xs font-normal text-slate-400">PCU</span>
+          </div>
+          <div className="text-[10px] text-indigo-400 font-mono mt-1">
+            {totalVehicles} Vehicles Tracked
+          </div>
+        </div>
+      </section>
+
+      {/* 3. Central Operational Section: Intersection Visualizer + Directional Congestion */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Left: Active Signal & Webster Controller Status */}
+        <div className="p-5 rounded-2xl bg-[#0D1424] border border-slate-800 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <span className="material-symbols-outlined text-cyan-400 text-base">traffic</span>
+                Signal Controller Status
+              </h2>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 font-bold">
+                {fourWayState?.intersection?.mode || 'Adaptive Webster ATSC'}
+              </span>
             </div>
-            <span className="text-xs font-mono text-on-surface-variant">
-              {currentState.toUpperCase()} · {timeLeft}s remaining
-            </span>
-          </div>
-          <div className="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-            <div
-              className="bg-secondary h-full rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"
-              style={{ width: `${Math.min(100, (timeLeft / 30) * 100)}%` }}
-            ></div>
-          </div>
-        </div>
 
-        {/* Traffic Density Card */}
-        <div className="bg-surface-container-low/80 rounded-xl p-4 border border-outline-variant/30 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-on-surface-variant">
-            <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">Intersection Density</span>
-            <span className="material-symbols-outlined text-primary text-[18px]">directions_car</span>
-          </div>
-          <div className="my-2">
-            <span className="text-2xl font-black text-on-surface">
-              {totalVehicles}
-            </span>
-            <span className="text-xs text-on-surface-variant ml-2 font-medium">vehicles present</span>
-          </div>
-          <div className="font-mono text-[11px] text-on-surface-variant">
-            Traffic Weight: <strong className="text-primary">{totalPcu} PCU</strong>
-          </div>
-        </div>
-
-        {/* Emergency Corridor Status */}
-        <div className={`bg-surface-container-low/80 rounded-xl p-4 border shadow-sm flex flex-col justify-between ${
-          emergencyActive ? 'border-error/50 bg-error-container/10' : 'border-outline-variant/30'
-        }`}>
-          <div className="flex items-center justify-between text-on-surface-variant">
-            <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">Emergency Priority</span>
-            <span className="material-symbols-outlined text-[18px] text-error">emergency</span>
-          </div>
-          <div className="my-2">
-            {emergencyActive ? (
-              <span className="text-base font-bold text-error flex items-center gap-1.5 animate-pulse">
-                <span>🚑</span> Corridor Preempted
-              </span>
-            ) : (
-              <span className="text-base font-bold text-on-surface">
-                Normal Adaptive Flow
-              </span>
-            )}
-          </div>
-          {emergencyActive ? (
-            <button
-              onClick={handleClearEmergency}
-              className="text-xs font-bold text-error hover:underline text-left"
-            >
-              Clear Emergency Override ✕
-            </button>
-          ) : (
-            <button
-              onClick={() => handleAmbulance('East')}
-              className="text-xs font-semibold text-primary hover:text-primary/80 text-left transition-colors"
-            >
-              ⚡ Test Ambulance on East Lane
-            </button>
-          )}
-        </div>
-
-        {/* Camera Array Status */}
-        <div className="bg-surface-container-low/80 rounded-xl p-4 border border-outline-variant/30 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-on-surface-variant">
-            <span className="font-mono text-[10px] uppercase tracking-wider font-semibold">Surveillance Arrays</span>
-            <span className="material-symbols-outlined text-secondary text-[18px]">videocam</span>
-          </div>
-          <div className="my-2">
-            <span className="text-2xl font-black text-on-surface">4 / 4</span>
-            <span className="text-xs text-secondary font-bold ml-2">● Live Streams</span>
-          </div>
-          <div className="text-[11px] text-on-surface-variant font-mono">
-            N, S, <strong className="text-secondary">E (4K Video)</strong>, W
-          </div>
-        </div>
-      </section>
-
-      {/* 3. Four Approaches Density Breakdown (North, South, East, West) */}
-      <section className="bg-surface-container-low/60 rounded-2xl p-5 border border-outline-variant/30 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary text-xl">traffic</span>
-            <h2 className="text-sm font-bold text-on-surface uppercase tracking-wider">
-              4-Way Approach Density & Green Split
-            </h2>
-          </div>
-          <span className="font-mono text-[10px] text-on-surface-variant bg-surface-container px-2 py-0.5 rounded">
-            CALCULATED VIA WEBSTER ATSC
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {laneData.map((lane) => {
-            const isGreen = currentLane === lane.name;
-            return (
-              <div
-                key={lane.name}
-                className={`p-4 rounded-xl border transition-all ${
-                  isGreen
-                    ? 'bg-secondary-container/10 border-secondary/50 shadow-sm'
-                    : 'bg-surface-container/60 border-outline-variant/20'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-on-surface text-sm">
-                      {lane.name} Corridor
-                    </span>
-                    {lane.isCustom4K && (
-                      <span className="font-mono text-[9px] bg-secondary/20 text-secondary border border-secondary/30 px-1 py-0.2 rounded font-bold">
-                        4K
-                      </span>
-                    )}
-                  </div>
-                  <span
-                    className={`font-mono text-[10px] px-2 py-0.5 rounded font-bold ${
-                      isGreen
-                        ? 'bg-secondary/20 text-secondary border border-secondary/30'
-                        : 'bg-surface-container-highest text-on-surface-variant'
-                    }`}
-                  >
-                    {isGreen ? 'GREEN' : 'RED'}
-                  </span>
-                </div>
-
-                <div className="flex items-baseline justify-between my-1">
-                  <span className="text-xl font-black text-on-surface">
-                    {lane.count}
-                  </span>
-                  <span className="text-xs text-on-surface-variant">vehicles in queue</span>
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] font-mono text-on-surface-variant mt-2 pt-2 border-t border-outline-variant/20">
-                  <span>Weight</span>
-                  <span className="font-bold text-primary">{lane.pcu} PCU</span>
-                </div>
+            {/* Signal Phase Display */}
+            <div className="flex items-center justify-between p-4 rounded-xl bg-slate-900 border border-slate-800 mb-4">
+              <div>
+                <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">Current Green Phase</span>
+                <span className="text-2xl font-black text-emerald-400 font-headline">
+                  {currentLane.toUpperCase()} APPROACH
+                </span>
+                <span className="text-[11px] text-slate-400 block mt-0.5">
+                  Next Scheduled: <strong className="text-slate-300">{fourWayState?.intersection?.next_direction || 'South'}</strong>
+                </span>
               </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* 4. Live Composite Feed Preview & Quick Actions */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* Left 7 cols: Live Composite Stream Preview */}
-        <div className="lg:col-span-7 bg-surface-container-low/70 rounded-2xl p-4 border border-outline-variant/30 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-error animate-pulse"></span>
-              <span className="text-xs font-bold text-on-surface uppercase tracking-wider font-mono">
-                Live 4-Way Composite Camera Preview
-              </span>
+              <div className="text-right">
+                <span className="text-3xl font-black font-mono text-white block">
+                  {timeLeft}s
+                </span>
+                <span className="text-[10px] font-mono text-slate-500 uppercase">Remaining</span>
+              </div>
             </div>
-            <button
-              onClick={() => onSwitchView && onSwitchView('4-way-ai-perception')}
-              className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
-            >
-              <span>Full Screen Feeds</span>
-              <span className="material-symbols-outlined text-[15px]">arrow_forward</span>
-            </button>
-          </div>
 
-          <div
-            onClick={() => onSwitchView && onSwitchView('4-way-ai-perception')}
-            className="relative w-full aspect-video bg-black rounded-xl overflow-hidden cursor-pointer group border border-outline-variant/30 flex items-center justify-center shadow-inner"
-          >
-            <img
-              src="/api/stream"
-              alt="4-Way Composite Stream"
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              onError={(e) => {
-                e.target.src = '/api/frame';
-              }}
-            />
-            <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <span className="px-3.5 py-1.5 rounded-lg bg-surface-dim/90 text-on-surface text-xs font-bold flex items-center gap-1.5 shadow-lg border border-outline-variant/40">
-                <span className="material-symbols-outlined text-primary text-[18px]">open_in_new</span>
-                <span>Click to Expand 4-Way AI Perception</span>
-              </span>
+            {/* ATSC Decision Reason */}
+            <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800/80 mb-4 text-xs text-slate-300 font-mono">
+              <span className="text-cyan-400 font-bold block mb-1">DECISION LOGIC:</span>
+              {fourWayState?.intersection?.decision_reason || `Phase allocated to ${currentLane} based on Webster saturation flow calculations and PCU queue load.`}
             </div>
           </div>
-        </div>
 
-        {/* Right 5 cols: Quick Actions & Recent Incident Alerts */}
-        <div className="lg:col-span-5 flex flex-col gap-4">
-          {/* Quick Actions Card */}
-          <div className="bg-surface-container-low/70 rounded-2xl p-4 border border-outline-variant/30 shadow-sm">
-            <h3 className="text-xs font-bold text-on-surface uppercase tracking-wider mb-3 flex items-center gap-1.5 font-mono">
-              <span className="material-symbols-outlined text-primary text-[18px]">bolt</span>
-              <span>Quick Emergency Corridors</span>
-            </h3>
-
+          {/* Quick Preemption Actions */}
+          <div className="pt-3 border-t border-slate-800">
+            <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block mb-2 font-semibold">
+              Operator Priority Override
+            </span>
             <div className="grid grid-cols-2 gap-2">
-              {['North', 'South', 'East', 'West'].map((lane) => (
-                <button
-                  key={lane}
-                  onClick={() => handleAmbulance(lane)}
-                  className="p-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high border border-outline-variant/30 text-left transition-all group"
-                >
-                  <div className="text-xs font-bold text-on-surface group-hover:text-primary transition-colors">
-                    🚑 {lane} Approach
-                  </div>
-                  <span className="text-[10px] text-on-surface-variant font-mono">
-                    Trigger Priority
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Recent Safety Incidents Feed */}
-          <div className="bg-surface-container-low/70 rounded-2xl p-4 border border-outline-variant/30 shadow-sm flex-1 flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-bold text-on-surface uppercase tracking-wider font-mono flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-error text-[18px]">warning</span>
-                <span>Recent Safety Events</span>
-              </h3>
               <button
-                onClick={() => onSwitchView && onSwitchView('incidents')}
-                className="text-[11px] font-semibold text-primary hover:underline"
+                onClick={() => handleAmbulance(currentLane)}
+                className="px-3 py-2 rounded-lg bg-red-950/60 hover:bg-red-900/60 text-red-300 border border-red-500/40 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
               >
-                View All
+                <span>🚑</span> Trigger EVP
+              </button>
+              <button
+                onClick={handleClearEmergency}
+                className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+              >
+                <span className="material-symbols-outlined text-sm">restart_alt</span> Reset ATSC
               </button>
             </div>
-
-            <div className="space-y-2 overflow-y-auto max-h-44">
-              {recentIncidents.length === 0 ? (
-                <div className="text-center py-6 text-xs text-on-surface-variant">
-                  No active incidents recorded. Traffic is moving safely.
-                </div>
-              ) : (
-                recentIncidents.map((inc) => (
-                  <div
-                    key={inc.id}
-                    className="p-2 rounded-lg bg-surface-container/70 border border-outline-variant/20 flex items-center justify-between text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm">
-                        {inc.type === 'ambulance' ? '🚑' : inc.type === 'accident' ? '💥' : '🛑'}
-                      </span>
-                      <div>
-                        <span className="font-semibold text-on-surface capitalize block leading-tight">
-                          {inc.type} · {inc.lane}
-                        </span>
-                        <span className="font-mono text-[10px] text-on-surface-variant">
-                          {inc.timestamp}
-                        </span>
-                      </div>
-                    </div>
-                    <span className="font-mono text-[9px] px-1.5 py-0.5 rounded font-bold bg-primary/20 text-primary">
-                      LOGGED
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
           </div>
         </div>
+
+        {/* Right: Approach Breakdown (2 Columns) */}
+        <div className="lg:col-span-2 p-5 rounded-2xl bg-[#0D1424] border border-slate-800">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2">
+              <span className="material-symbols-outlined text-indigo-400 text-base">alt_route</span>
+              Directional Congestion & Signal Phase
+            </h2>
+            <span className="text-xs text-slate-400">Junction 04 Corridors</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {laneData.map((lane) => {
+              const isGreen = lane.signal === 'GREEN' || currentLane === lane.name;
+              return (
+                <div
+                  key={lane.name}
+                  className={`p-4 rounded-xl border transition-all ${
+                    isGreen
+                      ? 'bg-emerald-950/20 border-emerald-500/50 shadow-sm shadow-emerald-950'
+                      : 'bg-slate-900 border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-bold text-white">{lane.name} Approach</span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                        isGreen
+                          ? 'bg-emerald-950 text-emerald-400 border-emerald-500/50'
+                          : 'bg-red-950 text-red-400 border-red-500/50'
+                      }`}
+                    >
+                      {isGreen ? 'GREEN PHASE' : 'RED PHASE'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+                    <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                      <span className="text-[10px] text-slate-400 font-mono block">Vehicles</span>
+                      <span className="text-base font-bold text-white">{lane.count}</span>
+                    </div>
+                    <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                      <span className="text-[10px] text-slate-400 font-mono block">PCU Demand</span>
+                      <span className="text-base font-bold text-cyan-400">{lane.pcu.toFixed(1)}</span>
+                    </div>
+                  </div>
+
+                  {/* Congestion Bar */}
+                  <div className="mt-3">
+                    <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
+                      <span>Density Index</span>
+                      <span className="text-slate-300 font-bold">{Math.round((lane.pcu / 15.0) * 100)}%</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${
+                          (lane.pcu / 15.0) > 0.7 ? 'bg-red-400' : (lane.pcu / 15.0) > 0.4 ? 'bg-amber-400' : 'bg-cyan-400'
+                        }`}
+                        style={{ width: `${Math.min(100, (lane.pcu / 15.0) * 100)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* 4. Recent Persistent Accident Incidents */}
+      <section className="p-5 rounded-2xl bg-[#0D1424] border border-slate-800">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-red-400 text-base">warning</span>
+            <h2 className="text-sm font-bold text-white">Recent Accident & Collision Feed</h2>
+          </div>
+          <button
+            onClick={() => onSwitchView('accidents')}
+            className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+          >
+            <span>Full Accident Triage</span>
+            <span className="material-symbols-outlined text-sm">arrow_forward</span>
+          </button>
+        </div>
+
+        {accidents.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 font-mono text-xs">
+            <span className="material-symbols-outlined text-3xl text-slate-600 block mb-2">verified_user</span>
+            No unresolved accident incidents recorded in database. Roadways clear.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {accidents.slice(0, 3).map((inc) => (
+              <div key={inc.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-500/40 font-bold uppercase">
+                      {inc.incident_type || 'ACCIDENT'}
+                    </span>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {inc.time_str || new Date(inc.timestamp * 1000).toLocaleTimeString()}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-200 font-medium line-clamp-2 mb-2">
+                    {inc.description}
+                  </p>
+
+                  <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                    <span>Approach: <strong className="text-slate-300">{inc.lane || 'North'}</strong></span>
+                    <span>·</span>
+                    <span>Status: <strong className={inc.status === 'resolved' ? 'text-emerald-400' : 'text-amber-400'}>{inc.status}</strong></span>
+                  </div>
+                </div>
+
+                {inc.snapshot_b64 && (
+                  <div className="mt-3 rounded-lg overflow-hidden border border-slate-800 h-24 bg-black">
+                    <img
+                      src={`data:image/jpeg;base64,${inc.snapshot_b64}`}
+                      alt="Incident Snapshot"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

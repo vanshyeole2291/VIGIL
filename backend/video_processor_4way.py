@@ -20,6 +20,10 @@ import os
 import sys
 from typing import Callable, Optional, Dict, List, Tuple
 from collections import deque
+import hashlib
+from core.violence_detector import RollingEvidenceBuffer
+from backend.database import SessionLocal
+import backend.models.db_models as db_models
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
@@ -45,7 +49,7 @@ LANE_POLYGONS_4WAY = getattr(config, 'LANE_POLYGONS_4WAY', {
 
 
 class VideoProcessor4Way:
-    def __init__(self, v_north="north.mp4", v_south="south.mp4", v_east="east.mp4", v_west="west.mp4",
+    def __init__(self, v_north="", v_south="", v_east="", v_west="",
                  frame_width=None, frame_height=None):
         self.v_paths = [self._resolve_video(v) for v in [v_north, v_south, v_east, v_west]]
         self.frame_width  = frame_width  or config.FRAME_WIDTH
@@ -69,6 +73,15 @@ class VideoProcessor4Way:
         self._audio_thread_obj:     Optional[threading.Thread] = None
         
         self.quadrant_mapping = [0, 1, 2, 3]  # Default N, S, E, W
+        self.is_paused = False
+        self._pause_start = 0.0
+        self.v_north = v_north
+        self.v_south = v_south
+        self.v_east = v_east
+        self.v_west = v_west
+        self._caps_to_switch = {}
+        self.evidence_buffer = RollingEvidenceBuffer(max_buffer_sec=12.0, target_fps=config.TARGET_FPS)
+        self._active_logged_events: Dict[str, float] = {}
         
         self.state_lock = threading.Lock()
         self.raw_frame: Optional[np.ndarray] = None
@@ -94,6 +107,56 @@ class VideoProcessor4Way:
         self._fps_t0 = time.time()
         self._fps_fc = 0
 
+
+    def pause(self):
+        """Immediately halt video processing and freeze inference frames."""
+        self.is_paused = True
+        if hasattr(self.optimizer, 'pause'):
+            self.optimizer.pause()
+        print("[4-Way Processor] Processing PAUSED (Inference and video capture halted)")
+
+    def resume(self):
+        """Resume video processing and inference from current frame."""
+        self.is_paused = False
+        if hasattr(self.optimizer, 'resume'):
+            self.optimizer.resume()
+        print("[4-Way Processor] Processing RESUMED")
+
+    def toggle_pause(self) -> bool:
+        """Toggle pause state."""
+        if self.is_paused:
+            self.resume()
+        else:
+            self.pause()
+        return self.is_paused
+
+    def switch_camera_source(self, camera_id: str, new_path: str) -> bool:
+        """
+        Dynamically switch the video source for a specific camera ID without restarting server.
+        camera_id: 'North', 'South', 'East', 'West', 'CAM_NORTH_01', 0, 1, 2, 3.
+        """
+        resolved_path = self._resolve_video(new_path)
+        lane_map = {
+            "north": 0, "cam_north_01": 0, "0": 0,
+            "south": 1, "cam_south_01": 1, "1": 1,
+            "east":  2, "cam_east_01":  2, "2": 2,
+            "west":  3, "cam_west_01":  3, "3": 3,
+        }
+        key = str(camera_id).lower().strip()
+        idx = lane_map.get(key, None)
+        if idx is None or idx >= 4:
+            return False
+
+        with self.state_lock:
+            self.v_paths[idx] = resolved_path
+            if idx == 0: self.v_north = new_path
+            elif idx == 1: self.v_south = new_path
+            elif idx == 2: self.v_east = new_path
+            elif idx == 3: self.v_west = new_path
+            self._caps_to_switch[idx] = resolved_path
+        print(f"[4-Way Processor] Scheduled dynamic source switch for camera {camera_id} (index {idx}) -> {new_path}")
+        return True
+
     def _crop_b64(self, frame: np.ndarray, x1: int, y1: int, x2: int, y2: int, pad: int = 6) -> str:
         """Extract and upscale isolated bounding box for UI detection gallery."""
         try:
@@ -113,12 +176,15 @@ class VideoProcessor4Way:
             return ""
 
     def _resolve_video(self, path=None) -> str:
+        """Find a valid video file or return empty string if unassigned."""
+        if not path or str(path).strip().lower() in ("", "none", "null", "undefined", "unassigned"):
+            return ""
+
         candidates = [
             path,
-            os.path.join(config.BASE_DIR, "assets", "videos", str(path)) if path else None,
-            os.path.join(config.BASE_DIR, str(path)) if path else None,
-            config.VIDEO_PATH
-        ] + config.FALLBACK_VIDEO_PATHS
+            os.path.join(config.BASE_DIR, "assets", "videos", str(path)),
+            os.path.join(config.BASE_DIR, str(path)),
+        ]
         for c in candidates:
             if c is None:
                 continue
@@ -131,7 +197,7 @@ class VideoProcessor4Way:
                 
             if os.path.isfile(s_c):
                 return c
-        return None
+        return ""
 
     def start(self, on_state: Optional[Callable] = None):
         self._on_state = on_state
@@ -293,26 +359,72 @@ class VideoProcessor4Way:
                 self.optimizer.trigger_emergency(high_lane, source="audio")
 
     def _capture_thread(self):
-        caps = [cv2.VideoCapture(v) for v in self.v_paths]
+        caps = [cv2.VideoCapture(v) if (v and os.path.exists(str(v))) else None for v in self.v_paths]
         qw, qh = self.frame_width // 2, self.frame_height // 2
         frame_delay = 1.0 / config.TARGET_FPS
+        direction_labels = ["NORTH", "SOUTH", "EAST", "WEST"]
 
         while self.is_running:
             start_time = time.time()
+
+            # Dynamic camera video source switching without server restart
+            with self.state_lock:
+                switches = dict(self._caps_to_switch)
+                self._caps_to_switch.clear()
+
+            for idx, new_p in switches.items():
+                if idx < len(caps) and caps[idx] is not None:
+                    try:
+                        caps[idx].release()
+                    except Exception:
+                        pass
+                caps[idx] = cv2.VideoCapture(new_p) if (new_p and os.path.exists(str(new_p))) else None
+                print(f"[4-Way Processor] Dynamically re-opened VideoCapture index {idx} with: {new_p}")
+
+            # If paused, hold current frame without advancing video positions
+            if self.is_paused:
+                time.sleep(0.04)
+                continue
+
             frames = []
-            for c in caps:
-                ret, f = c.read()
-                if not ret or f is None:
-                    c.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            for idx, c in enumerate(caps):
+                frame_obtained = False
+                if c is not None and c.isOpened():
                     ret, f = c.read()
-                if ret and f is not None:
-                    frames.append(cv2.resize(f, (qw, qh)))
-                else:
-                    # Black placeholder frame if video source unavailable
-                    black = np.zeros((qh, qw, 3), dtype=np.uint8)
-                    cv2.putText(black, "NO SIGNAL", (qw // 4, qh // 2),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    frames.append(black)
+                    if not ret or f is None:
+                        c.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, f = c.read()
+                    if ret and f is not None:
+                        frames.append(cv2.resize(f, (qw, qh)))
+                        frame_obtained = True
+
+                if not frame_obtained:
+                    # Sleek tactical placeholder card when no video source is assigned
+                    d_name = direction_labels[idx] if idx < 4 else f"CAM {idx+1}"
+                    placeholder = np.zeros((qh, qw, 3), dtype=np.uint8)
+                    placeholder[:] = (12, 16, 24)
+
+                    # Subtle tactical coordinate grid
+                    for gx in range(0, qw, 48):
+                        cv2.line(placeholder, (gx, 0), (gx, qh), (20, 26, 38), 1)
+                    for gy in range(0, qh, 48):
+                        cv2.line(placeholder, (0, gy), (qw, gy), (20, 26, 38), 1)
+
+                    # Perimeter border
+                    cv2.rectangle(placeholder, (4, 4), (qw - 4, qh - 4), (32, 42, 60), 1)
+
+                    # Crosshair marker
+                    cx_p, cy_p = qw // 2, qh // 2
+                    cv2.drawMarker(placeholder, (cx_p, cy_p - 15), (0, 180, 240), cv2.MARKER_CROSS, 20, 1)
+
+                    # Status typography
+                    cv2.putText(placeholder, f"[{d_name} APPROACH]", (cx_p - 68, cy_p - 35),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 200, 255), 1, cv2.LINE_AA)
+                    cv2.putText(placeholder, "NO VIDEO SOURCE ASSIGNED", (cx_p - 108, cy_p + 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.46, (200, 210, 225), 1, cv2.LINE_AA)
+                    cv2.putText(placeholder, "Select or upload video below", (cx_p - 90, cy_p + 35),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (110, 120, 140), 1, cv2.LINE_AA)
+                    frames.append(placeholder)
 
             with self.state_lock:
                 q_map = list(self.quadrant_mapping)
@@ -321,6 +433,10 @@ class VideoProcessor4Way:
             top_row = np.hstack((mapped_frames[0], mapped_frames[1]))
             bot_row = np.hstack((mapped_frames[2], mapped_frames[3]))
             composite = np.vstack((top_row, bot_row))
+
+            # Feed frame to rolling circular evidence buffer
+            if hasattr(self, 'evidence_buffer') and self.evidence_buffer is not None:
+                self.evidence_buffer.add_frame(composite, start_time)
 
             with self.state_lock:
                 self.raw_frame = composite.copy()
@@ -382,10 +498,8 @@ class VideoProcessor4Way:
                     if "accident" in a_type or "collision" in a_msg.lower() or "crash" in a_msg.lower():
                         if getattr(config, 'ENABLE_COLLISION_ALERTS', False):
                             ranked_candidates.append((10, "accident", a_msg, a_lane, a_box))
-                    elif "pedestrian" in a_type or "conflict" in a_type or "crowd" in a_type:
-                        ranked_candidates.append((8, "crowd", a_msg, a_lane, a_box))
-                    elif "stall" in a_type or "parking" in a_type or "immobilized" in a_msg.lower():
-                        ranked_candidates.append((5, "parking", a_msg, a_lane, a_box))
+                    # Filtered out: non-accident / routine crowd
+                    # Filtered out: routine queue dwell
 
                 # Priority 2: Physical Emergency Vehicle Presence (debounced per approach)
                 # Only genuine ambulances with verified status (never transit buses)
@@ -395,24 +509,15 @@ class VideoProcessor4Way:
                     amb_lane = lead_amb.lane or self.optimizer.emergency_lane or "West"
                     if now > self._last_amb_logged.get(amb_lane, 0.0):
                         amb_box = (lead_amb.x1, lead_amb.y1, lead_amb.x2, lead_amb.y2)
-                        ranked_candidates.append((7, "ambulance", f"Class-1 Emergency Priority: Ambulance active in {amb_lane} corridor.", amb_lane, amb_box))
-                        self._last_amb_logged[amb_lane] = now + 25.0
+                        ranked_candidates.append((12, "ambulance", f"Class-1 Emergency Priority: Ambulance active in {amb_lane} corridor.", amb_lane, amb_box))
+                        self._last_amb_logged[amb_lane] = now + 600.0
                 elif self.optimizer.emergency_active and getattr(self.optimizer, 'emergency_source', '') == "audio":
                     em_lane = self.optimizer.emergency_lane or "Corridor"
                     if now > self._last_amb_logged.get("audio", 0.0):
                         ranked_candidates.append((6, "ambulance", f"Acoustic Siren Preemption: Emergency vehicle approaching {em_lane}.", em_lane, None))
-                        self._last_amb_logged["audio"] = now + 25.0
+                        self._last_amb_logged["audio"] = now + 600.0
 
-                # Priority 3: Check for Stalled Queues (wait time >= ILLEGAL_PARKING_TIME)
-                stall_limit = getattr(config, 'ILLEGAL_PARKING_TIME', 15.0)
-                for lane, stats in current_lane_stats.items():
-                    if getattr(stats, 'max_wait_time', 0.0) >= stall_limit:
-                        stalled_box = None
-                        for t in current_tracks:
-                            if t.lane == lane and t.is_stopped and t.wait_time >= stall_limit:
-                                stalled_box = (t.x1, t.y1, t.x2, t.y2)
-                                break
-                        ranked_candidates.append((4, "parking", f"Vehicle obstruction / standstill in {lane} approach ({stats.max_wait_time:.0f}s wait).", lane, stalled_box))
+# Routine queue stalls excluded: Only true collisions & ambulances logged
 
                 if ranked_candidates:
                     ranked_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -441,6 +546,9 @@ class VideoProcessor4Way:
 
     def _inference_thread(self):
         while self.is_running:
+            if self.is_paused:
+                time.sleep(0.04)
+                continue
             with self.state_lock:
                 frame_to_process = self.raw_frame
             if frame_to_process is None:
@@ -477,12 +585,21 @@ class VideoProcessor4Way:
                     
                 lane_stats = self.lane_mgr.update(tracks)
                 
+                # Check for ambulance tracks to trigger immediate priority preemption
+                amb_tracks = [t for t in tracks if getattr(t, 'is_ambulance', False) and getattr(t, 'label', '') != 'bus']
+                if amb_tracks:
+                    lead_amb = amb_tracks[0]
+                    amb_lane = lead_amb.lane or "North"
+                    if amb_lane in ["North", "South", "East", "West"]:
+                        self.optimizer.trigger_emergency(amb_lane, source="visual")
+
                 self.optimizer.update_phase_duration(lane_stats)
                 self.optimizer.update(lane_stats)
                 self.analyzer.update(
                     tracks, lane_stats, list(detections),
                     signals=self.optimizer.signals,
-                    current_phase=self.optimizer.current_lane
+                    current_phase=self.optimizer.current_lane,
+                    optimizer=self.optimizer
                 )
                 
                 # Pedestrian conflict evaluation
@@ -647,15 +764,21 @@ class VideoProcessor4Way:
     def record_incident(self, inc_type: str, description: str, frame: Optional[np.ndarray] = None, lane: Optional[str] = None, bbox: Optional[Tuple[int, int, int, int]] = None):
         """Thread-safe recording of an incident with auto-cropped vehicle/incident ROI and full evidence frame."""
         now = time.time()
+        lane_idx_map = {"North": 0, "South": 1, "East": 2, "West": 3}
+        q_idx = lane_idx_map.get(lane, 0)
+        src_file = self.v_paths[q_idx] if (q_idx < len(self.v_paths) and self.v_paths[q_idx]) else f"{str(lane).lower()}.mp4"
+        cctv_filename = os.path.basename(str(src_file)) if src_file else "stream.mp4"
+        exact_camera_id = f"CCTV: {cctv_filename}"
+        exact_lane_id = f"{lane} ({cctv_filename})" if lane else exact_camera_id
+
+        # Strict Single-Event Deduplication: One incident ONLY ONE TIME per camera stream
+        dedup_key = f"{inc_type}:{exact_camera_id}"
         with self.state_lock:
-            # Comprehensive 60s debounce per approach lane & incident category to eliminate duplicate incident flooding
-            for inc in self.incident_history[:20]:
-                if inc.get("lane") == lane:
-                    same_type = (inc.get("type") == inc_type)
-                    both_safety = inc.get("type") in ("accident", "crowd", "parking") and inc_type in ("accident", "crowd", "parking")
-                    if (same_type or both_safety) and (now - inc.get("timestamp", 0)) < 60.0:
-                        return  # Throttled duplicate
-            
+            last_logged = self._active_logged_events.get(dedup_key, 0.0)
+            if now - last_logged < 600.0:  # 10 minute cooldown prevents repeated flooding
+                return
+            self._active_logged_events[dedup_key] = now
+
             target_frame = frame if frame is not None else self.latest_frame
             if target_frame is None and self.raw_frame is not None:
                 target_frame = self.raw_frame
@@ -742,18 +865,137 @@ class VideoProcessor4Way:
                     cropped_b64 = ""
                     b64_frame = ""
 
+            inc_id = f"INC_{int(now * 1000) % 100000}"
+            lane_idx_map = {"North": 0, "South": 1, "East": 2, "West": 3}
+            q_idx = lane_idx_map.get(lane, 0)
+            src_file = self.v_paths[q_idx] if (q_idx < len(self.v_paths) and self.v_paths[q_idx]) else f"{str(lane).lower()}.mp4"
+            cctv_filename = os.path.basename(str(src_file))
+            exact_camera_id = f"CCTV: {cctv_filename}"
+            exact_lane_id = f"{lane} ({cctv_filename})" if lane else f"CCTV: {cctv_filename}"
+
+            # Format description directly with CCTV filename
+            if not description.startswith("CCTV:"):
+                display_description = f"CCTV: {cctv_filename} — {description}"
+            else:
+                display_description = description
+
+            # Export 5-10 second MP4 video proof from Rolling Evidence Buffer
+            ev_id = f"EVD_{int(now * 1000) % 1000000}"
+            output_dir = os.path.join(config.BASE_DIR, "evidence", "videos")
+            os.makedirs(output_dir, exist_ok=True)
+            clip_filename = f"accident_{int(now * 1000) % 1000000}.mp4"
+            clip_path = os.path.join(output_dir, clip_filename)
+
+            evidence_clip_meta = None
+            if hasattr(self, 'evidence_buffer') and self.evidence_buffer is not None:
+                try:
+                    evidence_clip_meta = self.evidence_buffer.export_clip(clip_path, pre_sec=6.0)
+                except Exception as ev_err:
+                    print(f"[Incident] Evidence clip export error: {ev_err}")
+
+            rel_clip_path = f"evidence/videos/{clip_filename}" if (evidence_clip_meta and os.path.exists(clip_path)) else None
+            checksum = None
+            if rel_clip_path and os.path.exists(clip_path):
+                try:
+                    hasher = hashlib.sha256()
+                    with open(clip_path, "rb") as bf:
+                        while chunk := bf.read(8192):
+                            hasher.update(chunk)
+                    checksum = hasher.hexdigest()
+                except Exception:
+                    checksum = None
+
+            # Strictly persist to SQLite Database with camera_id, lane, and video evidence
+            try:
+                db_session = SessionLocal()
+                try:
+                    # Database-level deduplication: suppress duplicate if logged within 600 seconds
+                    recent_db = db_session.query(db_models.Incident).filter_by(
+                        incident_type=inc_type,
+                        camera_id=exact_camera_id
+                    ).filter(db_models.Incident.timestamp > now - 600.0).first()
+                    if recent_db:
+                        return
+
+                    cam_rec = db_session.query(db_models.Camera).filter_by(id=exact_camera_id).first()
+                    if not cam_rec:
+                        cam_rec = db_models.Camera(
+                            id=exact_camera_id,
+                            name=f"CCTV: {cctv_filename}",
+                            location=f"CCTV Video Source: {cctv_filename}",
+                            stream_url=str(src_file),
+                            camera_type="traffic",
+                            status="online",
+                            is_active=True
+                        )
+                        db_session.add(cam_rec)
+                        db_session.flush()
+
+                    if rel_clip_path:
+                        db_ev = db_models.Evidence(
+                            id=ev_id,
+                            incident_id=inc_id,
+                            file_path=rel_clip_path,
+                            file_type="video/mp4",
+                            file_size_bytes=evidence_clip_meta.get("file_size_bytes", 0) if evidence_clip_meta else 0,
+                            duration_sec=evidence_clip_meta.get("duration_sec", 6.0) if evidence_clip_meta else 6.0,
+                            checksum_sha256=checksum,
+                            created_at=now
+                        )
+                        db_session.add(db_ev)
+
+                    db_inc = db_models.Incident(
+                        id=inc_id,
+                        incident_type=inc_type,
+                        cctv_name=f"CCTV: {cctv_filename}",
+                        source_module="traffic",
+                        camera_id=exact_camera_id,
+                        lane=exact_lane_id,
+                        timestamp=now,
+                        confidence=0.92 if inc_type == "accident" else 0.88,
+                        severity="critical" if inc_type in ("accident", "ambulance") else "medium",
+                        validation_status="confirmed",
+                        status="new",
+                        description=display_description,
+                        evidence_id=ev_id if rel_clip_path else None,
+                        snapshot_b64=single_cam_b64 or cropped_b64,
+                        notes=f"Auto-captured from 4-way perception pipeline on {exact_lane_id} approach ({exact_camera_id}).",
+                        supporting_evidence=json.dumps({
+                            "lane": exact_lane_id,
+                            "camera_id": exact_camera_id,
+                            "bbox": crop_coords,
+                            "type": inc_type,
+                            "video_clip": rel_clip_path,
+                            "checksum_sha256": checksum
+                        })
+                    )
+                    db_session.add(db_inc)
+                    db_session.commit()
+                    print(f"[Incident DB] Logged incident {inc_id} ({inc_type}) at {exact_camera_id} / {exact_lane_id} with video proof: {rel_clip_path}")
+                except Exception as db_e:
+                    db_session.rollback()
+                    print(f"[Incident DB] Database commit error: {db_e}")
+                finally:
+                    db_session.close()
+            except Exception as e:
+                print(f"[Incident DB] Session error: {e}")
+
             incident_item = {
-                "id": f"INC_{int(now * 1000) % 100000}",
+                "id": inc_id,
                 "type": inc_type,
-                "lane": lane or "Approach",
-                "description": description,
+                "lane": exact_lane_id,
+                "camera_id": exact_camera_id,
+                "description": display_description,
                 "timestamp": now,
                 "bbox": str(crop_coords) if crop_coords else f"[0, 0, {qw}, {qh}]",
                 "camera_frame_b64": single_cam_b64,
                 "cropped_image_b64": single_cam_b64, # Default to THAT camera image only (not over-zoomed)
                 "vehicle_crop_b64": cropped_b64,
                 "frame_b64": single_cam_b64,          # THAT camera image only (not 4 cameras)
-                "full_4way_b64": b64_frame            # 4-way composite
+                "full_4way_b64": b64_frame,           # 4-way composite
+                "evidence_id": ev_id if rel_clip_path else None,
+                "evidence_path": rel_clip_path,
+                "checksum_sha256": checksum
             }
             self.incident_history.insert(0, incident_item)
             while len(self.incident_history) > 30:

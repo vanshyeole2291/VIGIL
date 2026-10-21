@@ -11,7 +11,7 @@ Maintains persistent vehicle identities across frames with:
 
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Deque
-from collections import deque, Counter
+from collections import deque
 from dataclasses import dataclass, field
 import time
 import sys, os
@@ -50,6 +50,8 @@ class Track:
     is_vehicle:   bool
     is_person:    bool
     is_ambulance: bool
+    is_fire_truck: bool = False
+    is_emergency_vehicle: bool = False
     ambulance_votes: int = 0
     pcu:          float = 1.0
     confidence:   float = 0.85
@@ -58,20 +60,8 @@ class Track:
     created_at:     float = field(default_factory=time.time)
     last_seen:      float = field(default_factory=time.time)
     frames_tracked: int   = 0
-    label_history:  Deque[str] = field(default_factory=lambda: deque(maxlen=15))
     frames_missing: int   = 0
-    hits:           int   = 1
     history:        Deque[Tuple[int, int, float]] = field(default_factory=lambda: deque(maxlen=30))
-    
-    # Exponential Moving Average (EMA) smoothed box coordinates to eliminate jitter/flicker
-    smooth_w:       float = 0.0
-    smooth_h:       float = 0.0
-    smooth_cx:      float = 0.0
-    smooth_cy:      float = 0.0
-    smooth_x1:      float = 0.0
-    smooth_y1:      float = 0.0
-    smooth_x2:      float = 0.0
-    smooth_y2:      float = 0.0
     
     # Kinematics
     prev_cx:      int   = 0
@@ -102,21 +92,7 @@ class Track:
         return max(1, self.y2 - self.y1)
     
     @property
-    def is_confirmed(self) -> bool:
-        """Confirmed tracks must have survived 2+ frames to filter 1-frame flickering ghost detections."""
-        return (self.frames_tracked >= 2) or (self.hits >= 2)
-
-    @property
     def box(self) -> Tuple[int, int, int, int]:
-        """Returns stable, smoothed bounding box coordinates with rigid width/height."""
-        if self.smooth_w > 0:
-            return (int(round(self.smooth_cx - self.smooth_w / 2.0)),
-                    int(round(self.smooth_cy - self.smooth_h / 2.0)),
-                    int(round(self.smooth_cx + self.smooth_w / 2.0)),
-                    int(round(self.smooth_cy + self.smooth_h / 2.0)))
-        if self.smooth_x2 > self.smooth_x1:
-            return (int(round(self.smooth_x1)), int(round(self.smooth_y1)),
-                    int(round(self.smooth_x2)), int(round(self.smooth_y2)))
         return (self.x1, self.y1, self.x2, self.y2)
     
     @property
@@ -139,11 +115,10 @@ class Track:
         dt = max(0.001, dt)
         dx = self.cx - self.prev_cx
         dy = self.cy - self.prev_cy
-        # Clamp maximum delta motion to prevent astronomical speed spikes
-        dist_moved = min(40.0, float(np.sqrt(dx**2 + dy**2)))
+        dist_moved = float(np.sqrt(dx**2 + dy**2))
         
-        # Deadband filter: Suppress bounding box pixel jitter (1.5-2px jitter creates false spikes)
-        if dist_moved < 2.0:
+        # Deadband filter: Suppress bounding box pixel jitter (1.5-2px jitter at 30fps creates false 45-60px/s spikes)
+        if dist_moved < 2.5:
             curr_speed_px = 0.0
             dx, dy = 0, 0
         else:
@@ -152,22 +127,21 @@ class Track:
         # Pixels per second
         self.velocity_vec = (dx / dt, dy / dt)
         
-        # Acceleration — only extreme kinetic shockwave (< -180 px/s²) from high speed marks sudden deceleration
+        # Acceleration
         self.acceleration = (curr_speed_px - self.speed_px_sec) / dt
-        if self.acceleration < -180.0 and self.speed_px_sec > 65.0:
+        # Genuine violent deceleration impact: was moving at speed (> 80 px/s ≈ 20 km/h) and suddenly collapsed to standstill (< 25 px/s)
+        # Prevents normal slow crawling and stop-and-go queueing in dense traffic from falsely flagging decel spikes
+        if self.speed_px_sec > 80.0 and curr_speed_px < 25.0 and self.acceleration < -120.0:
             self.had_sudden_decel = True
             self.last_decel_spike_time = time.time()
         elif time.time() - getattr(self, 'last_decel_spike_time', 0.0) > 3.0:
             self.had_sudden_decel = False
 
-        self.speed_px_sec = 0.85 * self.speed_px_sec + 0.15 * curr_speed_px  # High inertia motion estimate
+        self.speed_px_sec = 0.80 * self.speed_px_sec + 0.20 * curr_speed_px  # Smooth motion estimate
         
-        # Calibrated km/h conversion heuristic (clamped to realistic urban speeds max 65 km/h)
-        if self.is_stopped:
-            self.speed_kmh = 0.0
-        else:
-            calc_kmh = (self.speed_px_sec / 15.0) * 3.6
-            self.speed_kmh = round(min(65.0, max(0.0, calc_kmh)), 1)
+        # Calibrated km/h conversion heuristic (approx. 15 px ≈ 1 meter in standard urban camera angle)
+        # 1 m/s = 3.6 km/h -> speed_px_sec / 15 * 3.6
+        self.speed_kmh = round(max(0.0, (self.speed_px_sec / 15.0) * 3.6), 1)
         
         # Stopped threshold with hysteresis:
         # Enter stopped if speed < 25 px/sec (~6 km/h)
@@ -217,6 +191,8 @@ class Track:
             "y2": self.y2,
             "is_stopped": self.is_stopped,
             "is_ambulance": self.is_ambulance,
+            "is_fire_truck": getattr(self, 'is_fire_truck', False),
+            "is_emergency_vehicle": getattr(self, 'is_emergency_vehicle', False) or self.is_ambulance or getattr(self, 'is_fire_truck', False),
             "is_person": self.is_person,
             "dimensions": dim,
             "dist_to_stopline_m": dim.get("dist_to_stopline_m", 12.0),
@@ -228,11 +204,11 @@ class Track:
 
 class CentroidTracker:
     """
-    High-accuracy multi-object tracking engine blending IoU overlap,
-    motion-predicted centroid proximity, and kinematic trajectory modeling.
+    High-accuracy multi-object tracking engine blending IoU overlap and
+    centroid proximity matching with kinematic trajectory modeling.
     """
     
-    def __init__(self, max_disappeared: int = 35, max_distance: int = 120, iou_weight: float = 0.55):
+    def __init__(self, max_disappeared: int = 12, max_distance: int = 120, iou_weight: float = 0.5):
         self.max_disappeared = max_disappeared
         self.max_distance    = max_distance
         self.iou_weight      = iou_weight
@@ -244,30 +220,14 @@ class CentroidTracker:
     def update(self, detections) -> List[Track]:
         """Update tracker with incoming frame detections."""
         now = time.time()
-        dt = max(0.01, min(0.20, now - self._last_update_time))
+        dt = max(0.01, now - self._last_update_time)
         self._last_update_time = now
         
-        # If no detections in frame, age all active tracks with velocity projection
+        # If no detections in frame, age all active tracks
         if not detections:
             missing_ids = []
             for tid, track in self.tracks.items():
                 track.frames_missing += 1
-                vx, vy = track.velocity_vec
-                if (abs(vx) > 0.5 or abs(vy) > 0.5) and dt > 0:
-                    track.smooth_cx += vx * dt
-                    track.smooth_cy += vy * dt
-                    hw = track.smooth_w / 2.0 if track.smooth_w > 0 else (track.x2 - track.x1) / 2.0
-                    hh = track.smooth_h / 2.0 if track.smooth_h > 0 else (track.y2 - track.y1) / 2.0
-                    track.smooth_x1 = track.smooth_cx - hw
-                    track.smooth_y1 = track.smooth_cy - hh
-                    track.smooth_x2 = track.smooth_cx + hw
-                    track.smooth_y2 = track.smooth_cy + hh
-                    track.x1 = int(round(track.smooth_x1))
-                    track.y1 = int(round(track.smooth_y1))
-                    track.x2 = int(round(track.smooth_x2))
-                    track.y2 = int(round(track.smooth_y2))
-                    track.cx = int(round(track.smooth_cx))
-                    track.cy = int(round(track.smooth_cy))
                 if track.frames_missing > self.max_disappeared:
                     missing_ids.append(tid)
             for tid in missing_ids:
@@ -280,7 +240,7 @@ class CentroidTracker:
                 self._register(det)
             return list(self.tracks.values())
         
-        # ── Multi-Metric Matching Cost Matrix (Motion-Predictive Distance + 1-IoU) ──
+        # ── Multi-Metric Matching Cost Matrix (Distance + 1-IoU) ─────────────
         track_ids = list(self.tracks.keys())
         active_tracks = [self.tracks[tid] for tid in track_ids]
         
@@ -290,38 +250,21 @@ class CentroidTracker:
         
         for t_idx, track in enumerate(active_tracks):
             t_box = track.box
-            vx, vy = track.velocity_vec
-            # Motion-predicted centroid forward projection
-            pred_cx = track.cx + (vx * dt if abs(vx) > 0.5 else 0.0)
-            pred_cy = track.cy + (vy * dt if abs(vy) > 0.5 else 0.0)
-            
             for d_idx, det in enumerate(detections):
-                # Strict class isolation: vehicles never swap identities with pedestrians
-                if (track.is_person and not det.is_person) or (track.is_vehicle and det.is_person):
-                    cost_matrix[t_idx, d_idx] = 999.0
-                    continue
+                d_box = det.box
                 
-                # Quadrant isolation: Never match tracks and detections across different approaches
-                det_lane = getattr(det, 'lane', None)
-                if track.lane and det_lane and track.lane != det_lane:
-                    cost_matrix[t_idx, d_idx] = 999.0
-                    continue
-
-                # Spatial distance to predicted position
-                dist = np.hypot(pred_cx - det.cx, pred_cy - det.cy)
+                # Spatial Centroid distance
+                dist = np.linalg.norm(np.array([track.cx, track.cy]) - np.array([det.cx, det.cy]))
                 dist_norm = min(1.0, dist / float(self.max_distance))
                 
                 # IoU overlap
-                iou = compute_iou(t_box, det.box)
+                iou = compute_iou(t_box, d_box)
                 iou_cost = 1.0 - iou
                 
-                # If high IoU, heavily favor direct box overlap
-                if iou >= 0.25:
-                    cost_matrix[t_idx, d_idx] = 0.20 * dist_norm + 0.80 * iou_cost
-                else:
-                    cost_matrix[t_idx, d_idx] = (1.0 - self.iou_weight) * dist_norm + self.iou_weight * iou_cost
+                # Weighted hybrid cost
+                cost_matrix[t_idx, d_idx] = (1.0 - self.iou_weight) * dist_norm + self.iou_weight * iou_cost
                 
-                # Hard distance cutoff for unrelated objects
+                # Hard distance cutoff
                 if dist > self.max_distance and iou < 0.05:
                     cost_matrix[t_idx, d_idx] = 999.0
         
@@ -334,87 +277,49 @@ class CentroidTracker:
         for r, c in zip(rows, cols):
             if r in matched_tracks or c in matched_dets:
                 continue
-            if cost_matrix[r, c] > 1.8:  # Cost threshold for valid match
+            if cost_matrix[r, c] > 2.0:  # Beyond threshold
                 break
             
             tid = track_ids[r]
             det = detections[c]
             track = self.tracks[tid]
             
-            # Record trajectory (sample only when vehicle actually moved >= 2px to avoid stationary scribbles)
-            if np.hypot(det.cx - track.cx, det.cy - track.cy) >= 2.0:
-                track.history.append((track.cx, track.cy, now))
+            # Record trajectory
+            track.history.append((track.cx, track.cy, now))
             
             # Update kinematics
             track.prev_cx = track.cx
             track.prev_cy = track.cy
             track.cx = det.cx
             track.cy = det.cy
-            if getattr(det, 'lane', None):
-                track.lane = det.lane
-            
-            # Exponential Moving Average (EMA) coordinate smoothing with high inertia center + dimension filtering
-            w_alpha = 0.88
-            c_alpha = 0.70
-            if track.smooth_w > 0 and track.smooth_h > 0:
-                track.smooth_w  = w_alpha * track.smooth_w  + (1.0 - w_alpha) * det.w
-                track.smooth_h  = w_alpha * track.smooth_h  + (1.0 - w_alpha) * det.h
-                track.smooth_cx = c_alpha * track.smooth_cx + (1.0 - c_alpha) * det.cx
-                track.smooth_cy = c_alpha * track.smooth_cy + (1.0 - c_alpha) * det.cy
-            else:
-                track.smooth_w  = float(det.w)
-                track.smooth_h  = float(det.h)
-                track.smooth_cx = float(det.cx)
-                track.smooth_cy = float(det.cy)
-
-            hw = track.smooth_w / 2.0
-            hh = track.smooth_h / 2.0
-            track.smooth_x1 = track.smooth_cx - hw
-            track.smooth_y1 = track.smooth_cy - hh
-            track.smooth_x2 = track.smooth_cx + hw
-            track.smooth_y2 = track.smooth_cy + hh
-
-            track.x1 = int(round(track.smooth_x1))
-            track.y1 = int(round(track.smooth_y1))
-            track.x2 = int(round(track.smooth_x2))
-            track.y2 = int(round(track.smooth_y2))
-            track.hits += 1
-
+            track.x1, track.y1, track.x2, track.y2 = det.box
             track.confidence = round(float(getattr(det, 'confidence', track.confidence)), 2)
-            
-            # Majority voting across detection history to prevent label fluttering
-            track.label_history.append(det.label)
-            modal_label = Counter(track.label_history).most_common(1)[0][0]
-
-            # Strict vehicle type enforcement: confirmed transit bus (cls_id 5) or auto-rickshaw is not an ambulance
-            if det.label == "bus" and getattr(det, 'class_id', -1) == 5:
-                track.is_ambulance = False
-                track.ambulance_votes = 0
-                track.label = "bus"
-                track.pcu = 3.0
-            elif det.label in ["rickshaw", "auto"] or getattr(det, 'class_id', -1) == 82:
-                track.is_ambulance = False
-                track.ambulance_votes = 0
-                track.label = "rickshaw"
-                track.pcu = 0.8
-            elif det.is_ambulance:
-                track.ambulance_votes = min(15, track.ambulance_votes + 1)
-                if track.ambulance_votes >= 3:
-                    track.is_ambulance = True
-                    track.label = "ambulance"
+            track.lane = getattr(det, 'lane', track.lane)
+            has_amb_signal = det.is_ambulance or (det.label == "ambulance" and getattr(det, 'has_emergency_lights', False))
+            has_fire_signal = getattr(det, 'is_fire_truck', False) or (det.label in ["fire_truck", "firetruck"] and getattr(det, 'has_emergency_lights', False))
+            has_em_signal = has_amb_signal or has_fire_signal or getattr(det, 'is_emergency_vehicle', False)
+            if has_em_signal:
+                track.ambulance_votes = min(15, track.ambulance_votes + 3)
+                if track.ambulance_votes >= 2:
+                    track.is_ambulance = has_amb_signal or not has_fire_signal
+                    track.is_fire_truck = has_fire_signal
+                    track.is_emergency_vehicle = True
+                    track.label = "fire_truck" if has_fire_signal else "ambulance"
                     track.pcu = 0.0
                     track.last_ambulance_time = now
             else:
                 track.ambulance_votes = max(0, track.ambulance_votes - 1)
-                if track.ambulance_votes < 3:
+                # If emergency votes dropped to 0, demote to detected class
+                if track.ambulance_votes <= 0:
                     track.is_ambulance = False
-                    track.label = modal_label
+                    track.is_fire_truck = False
+                    track.is_emergency_vehicle = False
+                    track.label = det.label
                     track.pcu = getattr(det, 'pcu', 1.0)
                 else:
-                    track.is_ambulance = True
-                    track.label = "ambulance"
+                    # Brief occlusion buffer while overlapping
+                    track.is_emergency_vehicle = True
                     track.pcu = 0.0
-
             track.last_seen = now
             track.frames_tracked += 1
             track.frames_missing = 0
@@ -429,31 +334,12 @@ class CentroidTracker:
             if i not in matched_dets:
                 self._register(det)
         
-        # Clean up stale vanished tracks and project missing tracks with velocity
+        # Clean up stale vanished tracks
         missing_ids = []
         for i, tid in enumerate(track_ids):
             if i not in matched_tracks:
                 track = self.tracks[tid]
                 track.frames_missing += 1
-                
-                # Smooth velocity projection while momentarily occluded or missing
-                vx, vy = track.velocity_vec
-                if (abs(vx) > 0.5 or abs(vy) > 0.5) and dt > 0:
-                    track.smooth_cx += vx * dt
-                    track.smooth_cy += vy * dt
-                    hw = track.smooth_w / 2.0 if track.smooth_w > 0 else (track.x2 - track.x1) / 2.0
-                    hh = track.smooth_h / 2.0 if track.smooth_h > 0 else (track.y2 - track.y1) / 2.0
-                    track.smooth_x1 = track.smooth_cx - hw
-                    track.smooth_y1 = track.smooth_cy - hh
-                    track.smooth_x2 = track.smooth_cx + hw
-                    track.smooth_y2 = track.smooth_cy + hh
-                    track.x1 = int(round(track.smooth_x1))
-                    track.y1 = int(round(track.smooth_y1))
-                    track.x2 = int(round(track.smooth_x2))
-                    track.y2 = int(round(track.smooth_y2))
-                    track.cx = int(round(track.smooth_cx))
-                    track.cy = int(round(track.smooth_cy))
-
                 if track.frames_missing > self.max_disappeared:
                     missing_ids.append(tid)
         
@@ -464,37 +350,29 @@ class CentroidTracker:
     
     def _register(self, det) -> Track:
         """Instantiate and track a new object detection."""
-        is_bus = (det.label == "bus" or getattr(det, 'class_id', -1) == 5)
-        has_amb_signal = (not is_bus) and bool(det.is_ambulance or getattr(det, 'has_emergency_lights', False))
-        track_lbl = "bus" if is_bus else det.label
-        track_pcu = 3.0 if is_bus else getattr(det, 'pcu', 1.0)
+        has_amb_signal = det.is_ambulance or (det.label == "ambulance" and getattr(det, 'has_emergency_lights', False))
+        has_fire_signal = getattr(det, 'is_fire_truck', False) or (det.label in ["fire_truck", "firetruck"] and getattr(det, 'has_emergency_lights', False))
+        has_em_signal = has_amb_signal or has_fire_signal or getattr(det, 'is_emergency_vehicle', False)
+        assigned_label = "fire_truck" if has_fire_signal else ("ambulance" if has_amb_signal else det.label)
         track = Track(
             track_id=self._next_id,
-            label=track_lbl,
+            label=assigned_label,
             cx=det.cx, cy=det.cy,
             x1=det.x1, y1=det.y1,
             x2=det.x2, y2=det.y2,
             is_vehicle=det.is_vehicle,
             is_person=det.is_person,
-            is_ambulance=False,
-            ambulance_votes=1 if has_amb_signal else 0,
-            pcu=track_pcu,
+            is_ambulance=has_amb_signal or (has_em_signal and not has_fire_signal),
+            is_fire_truck=has_fire_signal,
+            is_emergency_vehicle=has_em_signal,
+            ambulance_votes=3 if has_em_signal else 0,
+            pcu=0.0 if has_em_signal else getattr(det, 'pcu', 1.0),
             confidence=round(float(getattr(det, 'confidence', 0.85)), 2),
-            smooth_w=float(det.w),
-            smooth_h=float(det.h),
-            smooth_cx=float(det.cx),
-            smooth_cy=float(det.cy),
-            smooth_x1=float(det.x1),
-            smooth_y1=float(det.y1),
-            smooth_x2=float(det.x2),
-            smooth_y2=float(det.y2),
             lane=getattr(det, 'lane', None),
-            hits=1
         )
         track.prev_cx = det.cx
         track.prev_cy = det.cy
         track.history.append((det.cx, det.cy, time.time()))
-        track.label_history.append(track_lbl)
         self.tracks[self._next_id] = track
         self._next_id += 1
         return track
@@ -505,6 +383,12 @@ class CentroidTracker:
     def get_ambulance_tracks(self) -> List[Track]:
         return [t for t in self.tracks.values() if t.is_ambulance]
     
+    def get_fire_truck_tracks(self) -> List[Track]:
+        return [t for t in self.tracks.values() if getattr(t, 'is_fire_truck', False)]
+    
+    def get_emergency_tracks(self) -> List[Track]:
+        return [t for t in self.tracks.values() if t.is_ambulance or getattr(t, 'is_fire_truck', False) or getattr(t, 'is_emergency_vehicle', False)]
+    
     def get_stopped_vehicles(self, min_wait: float = 3.0) -> List[Track]:
         return [t for t in self.tracks.values() if t.is_vehicle and t.is_stopped and t.wait_time >= min_wait]
     
@@ -513,84 +397,44 @@ class CentroidTracker:
         return len(self.tracks)
     
     def draw_tracks(self, frame: np.ndarray, track_list: Optional[List[Track]] = None) -> np.ndarray:
-        """Draw smooth anti-aliased bounding boxes, labels, and motion trails on confirmed tracks."""
+        """Draw trajectory trails, ID badges, and kinematic speed tags on frame."""
         tracks = track_list or list(self.tracks.values())
         h, w = frame.shape[:2]
-
-        CLASS_COLORS = {
-            "car":        (240, 160, 40),   # Sky blue (BGR)
-            "bus":        (80, 210, 110),   # Emerald
-            "truck":      (60, 190, 100),   # Forest emerald
-            "motorcycle": (40, 180, 245),   # Amber
-            "bicycle":    (60, 200, 240),   # Yellow
-            "rickshaw":   (40, 210, 240),   # Warm yellow
-            "auto":       (40, 210, 240),   # Warm yellow
-            "person":     (210, 110, 180),  # Violet
-            "ambulance":  (40, 40, 240),    # High-intensity Red
-        }
-
         for track in tracks:
-            # Filter: only draw confirmed tracks (2+ hits) and only if currently visible (frames_missing <= 2)
-            # This ensures only vehicles physically present are shown, eliminating ghost boxes!
-            if not track.is_confirmed or track.frames_missing > 2:
-                continue
-
-            bx1, by1, bx2, by2 = track.box
-            bx1 = max(0, min(w - 5, bx1))
-            by1 = max(0, min(h - 5, by1))
-            bx2 = max(bx1 + 5, min(w, bx2))
-            by2 = max(by1 + 5, min(h, by2))
-
-            lbl = str(track.label).lower().strip()
-            base_color = CLASS_COLORS.get(lbl, (220, 170, 50))
-            if track.is_ambulance:
-                base_color = (40, 40, 240)
-
-            # Draw sleek 2px bounding box with anti-aliasing
-            cv2.rectangle(frame, (bx1, by1), (bx2, by2), base_color, 2, cv2.LINE_AA)
-
-            # Subtle white corner brackets for crisp edge definition
-            c_len = max(6, min(14, (bx2 - bx1) // 4, (by2 - by1) // 4))
-            cv2.line(frame, (bx1, by1), (bx1 + c_len, by1), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx1, by1), (bx1, by1 + c_len), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx2, by1), (bx2 - c_len, by1), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx2, by1), (bx2, by1 + c_len), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx1, by2), (bx1 + c_len, by2), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx1, by2), (bx1, by2 - c_len), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx2, by2), (bx2 - c_len, by2), (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (bx2, by2), (bx2, by2 - c_len), (255, 255, 255), 2, cv2.LINE_AA)
-
-            # Draw smooth motion trail only for moving vehicles (never stationary clutter)
-            if not track.is_stopped and len(track.history) > 2:
-                pts = [(int(pt[0]), int(pt[1])) for pt in track.history]
+            # Trajectory motion trail with glowing anti-aliased gradient
+            pts = [(int(pt[0]), int(pt[1])) for pt in track.history]
+            if len(pts) > 1:
                 for i in range(1, len(pts)):
-                    p1 = pts[i - 1]
-                    p2 = pts[i]
-                    # Only draw segment if within realistic movement distance (< 35px) to eliminate teleporting lines
-                    if np.hypot(p2[0] - p1[0], p2[1] - p1[1]) < 35.0:
-                        alpha = i / len(pts)
-                        thick = 1 if i < (len(pts) // 2) else 2
-                        color = (int(base_color[0] * alpha), int(base_color[1] * alpha), int(base_color[2] * alpha))
-                        cv2.line(frame, p1, p2, color, thick, cv2.LINE_AA)
-
-            # Top label badge (Clean ASCII formatting with pipe | to prevent OpenCV Hershey ?? rendering)
+                    alpha = i / len(pts)
+                    thick = 1 if i < (len(pts) // 2) else 2
+                    color = (int(56 * alpha), int(189 * alpha), int(248 * alpha))
+                    cv2.line(frame, pts[i - 1], pts[i], color, thick, cv2.LINE_AA)
+            
+            # Unified tactical HUD tag
             if track.is_ambulance:
                 tag = f"[EVP] #{track.track_id} AMBULANCE"
+                tag_color = (0, 0, 255)
             elif track.is_person:
                 tag = f"#{track.track_id} PEDESTRIAN"
+                tag_color = (255, 200, 50)
             else:
-                speed_str = f"{track.speed_kmh:.0f}km/h" if not track.is_stopped else f"STOP {track.wait_time:.0f}s"
-                tag = f"#{track.track_id} {lbl.upper()} | {speed_str}"
+                speed_str = f"{track.speed_kmh:.0f} km/h" if not track.is_stopped else f"STOP {track.wait_time:.0f}s"
+                lbl = getattr(track, 'label', 'CAR').upper()
+                tag = f"#{track.track_id} {lbl} · {speed_str}"
+                tag_color = (0, 180, 255) if track.is_stopped else (50, 220, 120)
 
-            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
-            tag_y2 = max(th + 6, by1 - 3)
-            tag_y1 = tag_y2 - th - 5
-            tag_x1 = bx1
-            tag_x2 = min(w, tag_x1 + tw + 8)
-
+            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+            
+            tag_x1 = max(0, track.x1)
+            tag_y1 = min(h - th - 6, track.y2 + 4)
+            tag_x2 = min(w, tag_x1 + tw + 6)
+            tag_y2 = tag_y1 + th + 4
+            
             cv2.rectangle(frame, (tag_x1, tag_y1), (tag_x2, tag_y2), (10, 15, 25), -1)
-            cv2.rectangle(frame, (tag_x1, tag_y1), (tag_x2, tag_y2), base_color, 1, cv2.LINE_AA)
-            cv2.putText(frame, tag, (tag_x1 + 4, tag_y2 - 3),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 255), 1, cv2.LINE_AA)
-
+            cv2.rectangle(frame, (tag_x1, tag_y1), (tag_x2, tag_y2), tag_color, 1, cv2.LINE_AA)
+            cv2.putText(frame, tag,
+                        (tag_x1 + 3, tag_y2 - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, tag_color, 1,
+                        cv2.LINE_AA)
+        
         return frame
