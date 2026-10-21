@@ -113,8 +113,8 @@ EMERGENCY_GREEN_HOLD    = 30.0   # Minimum duration for green corridor hold (sec
 # ─── Accident & Traffic Anomaly Detection ────────────────────────────────────
 ENABLE_COLLISION_ALERTS = True   # Enable collision & accident alerts for real-time safety preemption
 ACCIDENT_STOP_THRESHOLD = 2.0   # Seconds a vehicle is stopped before flagged
-ACCIDENT_OVERLAP_IOU    = 0.45  # Realistic physical impact overlap threshold (rejects normal queue proximity)
-COLLISION_CONFIRM_TIME  = 2.5   # 2.0s sustained confirmation time for genuine collisions
+ACCIDENT_OVERLAP_IOU    = 0.15  # Realistic physical impact overlap threshold (rejects normal queue proximity)
+COLLISION_CONFIRM_TIME  = 2.0   # 2.0s sustained confirmation time for genuine collisions
 ILLEGAL_PARKING_TIME    = 15.0  # Seconds stationary in moving lane before parking/stall alert
 
 # ─── Backend Server ───────────────────────────────────────────────────────────

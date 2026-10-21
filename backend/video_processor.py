@@ -205,56 +205,54 @@ class VideoProcessor:
             
             # ── Incident Detection Pipeline ──
             now = time.time()
-            if now - self._last_incident_time > 4.0:
-                # 1. Emergency Preemption Trigger
-                if getattr(self.optimizer, 'emergency_active', False):
-                    em_source = getattr(self.optimizer, 'emergency_source', 'visual')
-                    em_lane = getattr(self.optimizer, 'emergency_lane', 'Approach') or 'Approach'
-                    self.record_incident(
-                        inc_type="ambulance",
-                        description=f"Class-1 Emergency Corridor ({em_source.upper()}) active on {em_lane}.",
-                        frame=annotated,
-                        lane=em_lane
-                    )
-                    self._last_incident_time = now
-
-                # 2. Physical Emergency Vehicle Tracks
-                amb_tracks = [t for t in current_tracks if getattr(t, 'is_ambulance', False) and getattr(t, 'label', '') != 'bus']
-                if amb_tracks:
-                    lead_amb = amb_tracks[0]
-                    amb_box = (lead_amb.x1, lead_amb.y1, lead_amb.x2, lead_amb.y2)
-                    self.record_incident(
-                        inc_type="ambulance",
-                        description=f"Class-1 Emergency Priority: Ambulance detected in traffic flow.",
-                        frame=annotated,
-                        lane="Single Feed",
-                        bbox=amb_box
-                    )
-                    self._last_incident_time = now
-
-                # 3. Latest alerts from analyzer
+            has_urgent_accident = any("accident" in str(a.get("type", "")).lower() or "collision" in str(a.get("message", "")).lower() or "crash" in str(a.get("message", "")).lower() for a in self.latest_alerts)
+            if has_urgent_accident or (now - self._last_incident_time > 8.0):
+                recorded = False
+                
+                # Priority 1: Accidents & Safety Hazards (Immediate Preemption)
                 for a in self.latest_alerts:
                     a_type = a.get("type", "").lower()
                     a_msg = a.get("message", "")
                     a_lane = a.get("lane") or "Single Feed"
                     a_box = a.get("bbox")
                     
-                    if "accident" in a_type or "accident" in a_msg.lower() or "collision" in a_msg.lower():
+                    if "accident" in a_type or "accident" in a_msg.lower() or "collision" in a_msg.lower() or "crash" in a_msg.lower():
                         self.record_incident("accident", a_msg, annotated, a_lane, bbox=a_box)
                         self._last_incident_time = now
+                        recorded = True
                         break
-                    elif "ambulance" in a_type or "ambulance" in a_msg.lower():
-                        self.record_incident("ambulance", a_msg, annotated, a_lane, bbox=a_box)
+
+                # Priority 2: Genuine Physical Emergency Vehicle Tracks (debounced, never bus or truck)
+                if not recorded and not has_urgent_accident:
+                    amb_tracks = [t for t in current_tracks if getattr(t, 'is_ambulance', False) and getattr(t, 'label', '') not in ('bus', 'truck')]
+                    if amb_tracks:
+                        lead_amb = amb_tracks[0]
+                        amb_box = (lead_amb.x1, lead_amb.y1, lead_amb.x2, lead_amb.y2)
+                        self.record_incident(
+                            inc_type="ambulance",
+                            description="Class-1 Emergency Priority: Ambulance detected in traffic flow.",
+                            frame=annotated,
+                            lane="Single Feed",
+                            bbox=amb_box
+                        )
                         self._last_incident_time = now
-                        break
-                    elif "pedestrian" in a_type or "crowd" in a_type or "pedestrian" in a_msg.lower():
-                        self.record_incident("crowd", a_msg, annotated, a_lane, bbox=a_box)
-                        self._last_incident_time = now
-                        break
-                    elif "stall" in a_type or "parking" in a_type or "immobilized" in a_msg.lower():
-                        self.record_incident("parking", a_msg, annotated, a_lane, bbox=a_box)
-                        self._last_incident_time = now
-                        break
+                        recorded = True
+
+                # Priority 3: Crowds and stalls
+                if not recorded and not has_urgent_accident:
+                    for a in self.latest_alerts:
+                        a_type = a.get("type", "").lower()
+                        a_msg = a.get("message", "")
+                        a_lane = a.get("lane") or "Single Feed"
+                        a_box = a.get("bbox")
+                        if "pedestrian" in a_type or "crowd" in a_type or "pedestrian" in a_msg.lower():
+                            self.record_incident("crowd", a_msg, annotated, a_lane, bbox=a_box)
+                            self._last_incident_time = now
+                            break
+                        elif "stall" in a_type or "parking" in a_type or "immobilized" in a_msg.lower():
+                            self.record_incident("parking", a_msg, annotated, a_lane, bbox=a_box)
+                            self._last_incident_time = now
+                            break
 
                 # 4. Check for stalls (> 15s)
                 stall_limit = getattr(config, 'ILLEGAL_PARKING_TIME', 15.0)
@@ -371,7 +369,7 @@ class VideoProcessor:
         dedup_key = f"{inc_type}:{exact_camera_id}"
         with self.state_lock:
             last_logged = getattr(self, '_active_logged_events', {}).get(dedup_key, 0.0)
-            if now - last_logged < 600.0:  # 10 minute cooldown prevents repeated flooding
+            if now - last_logged < 10.0:   # 10s debouncing cooldown prevents duplicate bursts
                 return
             if not hasattr(self, '_active_logged_events'):
                 self._active_logged_events = {}
@@ -477,7 +475,7 @@ class VideoProcessor:
                     recent_db = db_session.query(db_models.Incident).filter_by(
                         incident_type=inc_type,
                         camera_id=exact_camera_id
-                    ).filter(db_models.Incident.timestamp > now - 600.0).first()
+                    ).filter(db_models.Incident.timestamp > now - 10.0).first()
                     if recent_db:
                         return
 
@@ -561,39 +559,5 @@ class VideoProcessor:
                 self.incident_history.pop()
 
     def _seed_initial_incidents(self) -> List[Dict]:
-        now = time.time()
-        return [
-            {
-                "id": "INC_8921",
-                "type": "ambulance",
-                "lane": "North",
-                "description": "Class-1 Emergency Priority: Ambulance optical detection — arterial green wave corridor cleared.",
-                "timestamp": now - 180,
-                "frame_b64": ""
-            },
-            {
-                "id": "INC_8914",
-                "type": "crowd",
-                "lane": "East",
-                "description": "Pedestrian Crosswalk Safety: Mid-block pedestrian conflict hold — safe clearance extended (+12s).",
-                "timestamp": now - 450,
-                "frame_b64": ""
-            },
-            {
-                "id": "INC_8902",
-                "type": "parking",
-                "lane": "West",
-                "description": "Traffic Flow Obstruction: Stalled commercial vehicle flagged in West approach lane (>20s).",
-                "timestamp": now - 780,
-                "frame_b64": ""
-            },
-            {
-                "id": "INC_8890",
-                "type": "accident",
-                "lane": "South",
-                "description": "Kinematic Collision Confirmation: Two-vehicle proximity dwell resolved without sustained impact.",
-                "timestamp": now - 1200,
-                "frame_b64": ""
-            }
-        ]
+        return []
 

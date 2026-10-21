@@ -228,11 +228,12 @@ async def api_incidents():
             seen_times = {}
             for inc in records:
                 c_id = inc.camera_id or (f"CCTV: {inc.lane}" if inc.lane else "CCTV: Camera-01")
-                # Deduplicate: one incident only one time per camera in feed
+                # Deduplicate: suppress rapid duplicate bursts (<10s) of same event
                 event_key = (inc.incident_type, c_id)
-                if event_key in seen_times:
+                inc_ts = float(inc.timestamp or 0)
+                if event_key in seen_times and abs(inc_ts - seen_times[event_key]) < 10.0:
                     continue
-                seen_times[event_key] = float(inc.timestamp or 0)
+                seen_times[event_key] = inc_ts
 
                 tier = inc.validation_status or ("confirmed" if inc.incident_type != "accident" else "confirmed by configured rules")
                 is_sim = "test" in str(tier).lower() or "demo" in str(tier).lower() or "[simulation" in str(inc.description).lower() or "[demo" in str(inc.description).lower() or "[manual" in str(inc.description).lower()
@@ -847,6 +848,20 @@ class IPWebcamConfigRequest(BaseModel):
     direction: Optional[str] = "North"
 
 
+def start_single_processor(source: str):
+    global single_processor, single_cam_status
+    if single_processor and single_processor.is_running:
+        single_processor.stop()
+    def single_on_state(state: dict):
+        if main_event_loop and main_event_loop.is_running():
+            state_copy = dict(state)
+            state_copy["is_single_cam"] = True
+            asyncio.run_coroutine_threadsafe(broadcast(state_copy), main_event_loop)
+    single_processor = VideoProcessor(video_path=source)
+    single_processor.start(on_state=single_on_state)
+    single_cam_status = "running"
+    return single_processor
+
 @app.post("/api/single-camera/select")
 async def api_single_camera_select(req: SingleCamSelectRequest):
     global single_processor, single_cam_source, single_cam_status
@@ -855,11 +870,7 @@ async def api_single_camera_select(req: SingleCamSelectRequest):
         raise HTTPException(status_code=400, detail="Source cannot be empty")
     
     single_cam_source = src
-    if single_processor and single_processor.is_running:
-        single_processor.stop()
-        single_processor = VideoProcessor(video_path=single_cam_source)
-        single_processor.start()
-        single_cam_status = "running"
+    start_single_processor(single_cam_source)
     return {"status": "selected", "source": single_cam_source, "state": single_cam_status}
 
 
@@ -915,8 +926,7 @@ async def api_single_camera_frame():
 def api_single_camera_stream():
     global single_processor
     if single_processor is None or not single_processor.is_running:
-        single_processor = VideoProcessor(video_path=single_cam_source)
-        single_processor.start()
+        start_single_processor(single_cam_source)
 
     def gen():
         while True:

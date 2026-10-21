@@ -194,7 +194,7 @@ class Detector:
         Execute detection on single BGR frame.
         Applies HSV emergency vehicle verification and PCU attribution.
         """
-        results = self.model(frame, conf=self.conf, verbose=False)
+        results = self.model(frame, conf=min(0.18, self.conf), verbose=False)
         detections: List[Detection] = []
         
         if not results:
@@ -227,6 +227,8 @@ class Detector:
             area_frac = (box_width * box_height) / float(w * h)
             
             is_accident = (cls_id == 6 or label in ["accident", "collision", "crash"])
+            if not is_accident and conf < self.conf:
+                continue
             is_person = (label in ["person", "pedestrian", "crowd"])
             is_vehicle = (not is_accident) and ((label in ["car", "motorcycle", "bus", "truck", "ambulance", "fire_truck", "firetruck", "bicycle", "van", "suv", "auto", "rickshaw", "vehicle"]) or (not is_person and label != "unknown"))
             has_emergency_lights = False
@@ -252,7 +254,8 @@ class Detector:
                     roof_blue = cv2.countNonZero(r_blue) / rf_area
                     
                     # Verified emergency optical lightbar: concentrated high-saturation strobes
-                    if (roof_red > 0.065 or roof_blue > 0.065 or (roof_red > 0.025 and roof_blue > 0.025)):
+                    # (Requires blue strobe or alternating red-blue, preventing normal red taillights from false-triggering)
+                    if (roof_blue > 0.045 or (roof_red > 0.04 and roof_blue > 0.02) or (roof_red > 0.09 and label in ["ambulance", "fire_truck", "firetruck"])):
                         has_emergency_lights = True
                         
                     # Auto-Rickshaw detection: yellow roof / green body with 3-wheeler aspect ratio
@@ -267,9 +270,17 @@ class Detector:
                     elif "rickshaw" in label or "auto" in label:
                         is_auto_rickshaw = True
 
+            # Demote large vehicles (like transit buses and box trucks) if falsely labeled ambulance
+            is_bus_shape = (aspect_ratio >= 1.65 and area_frac >= 0.04)
+            is_truck_shape = (aspect_ratio >= 1.35 and area_frac >= 0.035)
+
             # If vehicle is an auto-rickshaw, strictly classify as auto and NEVER ambulance
             if is_auto_rickshaw:
                 label = "auto"
+                is_ambulance_pred = False
+                is_fire_truck_pred = False
+            elif is_bus_shape and not has_emergency_lights:
+                label = "bus"
                 is_ambulance_pred = False
                 is_fire_truck_pred = False
             else:
@@ -278,9 +289,9 @@ class Detector:
                 min_area_frac = getattr(config, 'AMBULANCE_MIN_AREA_FRAC', 0.002)
                 
                 # Genuine ambulance: verified strobes OR calibrated high confidence on full-size vehicle
-                if is_amb_class and has_emergency_lights and (conf >= 0.45):
+                if is_amb_class and has_emergency_lights and (conf >= 0.40):
                     is_ambulance_pred = True
-                elif is_amb_class and (conf >= amb_conf_thresh) and (area_frac >= min_area_frac):
+                elif is_amb_class and (conf >= 0.88) and (area_frac >= min_area_frac) and not is_truck_shape:
                     is_ambulance_pred = True
                 else:
                     is_ambulance_pred = False
@@ -292,7 +303,7 @@ class Detector:
             is_emergency = is_ambulance or is_fire_truck
             
             if not is_ambulance and label == "ambulance":
-                label = "car"  # Demote low-confidence / small detections to normal car
+                label = "bus" if is_bus_shape else ("truck" if is_truck_shape else "car")
             if not is_fire_truck and label in ["fire_truck", "firetruck"]:
                 label = "truck"
             

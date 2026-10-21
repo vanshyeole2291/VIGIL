@@ -106,7 +106,7 @@ class AccidentDetector:
         
         # Per-lane debouncing cooldowns to prevent alert floods
         self._lane_cooldowns: Dict[str, float] = {}
-        self.cooldown_duration = 600.0  # 10 minute cooldown prevents repeated flooding of same incident
+        self.cooldown_duration = 10.0   # 10s cooldown allows capturing distinct accident scenes
 
     def _init_visual_model(self):
         """Attempt to load trained accident visual model if weights exist."""
@@ -306,25 +306,31 @@ class AccidentDetector:
         for v_box in visual_accident_boxes:
             v_lane = "South"
             cx, cy = (v_box[0] + v_box[2]) / 2, (v_box[1] + v_box[3]) / 2
+            matching_ids = []
             for t in vehicle_tracks:
                 if t.x1 <= cx <= t.x2 and t.y1 <= cy <= t.y2:
                     v_lane = t.lane or v_lane
-                    break
-            last_cd = self._lane_cooldowns.get(v_lane, 0.0)
+                    matching_ids.append(t.track_id)
+            last_cd = self._lane_cooldowns.get(f"{v_lane}_visual", 0.0)
             if now > last_cd:
-                self._lane_cooldowns[v_lane] = now + 20.0
+                self._lane_cooldowns[f"{v_lane}_visual"] = now + 10.0
                 inc_id = f"inc-{uuid.uuid4().hex[:8]}"
                 inc = AccidentIncident(
                     incident_id=inc_id,
-                    state=AccidentState.CONFIRMED_FUSION if any(t.is_stopped for t in vehicle_tracks) else AccidentState.CONFIRMED_AI,
+                    state=AccidentState.CONFIRMED_FUSION if any(t.is_stopped for t in vehicle_tracks) else AccidentState.CONFIRMED_MODEL,
                     lane=v_lane,
                     timestamp=now,
                     confirmed_at=now,
-                    vehicles_involved=[],
-                    severity="critical",
-                    confidence=0.92,
+                    had_sudden_decel=any(getattr(t, 'had_sudden_decel', False) for t in vehicle_tracks),
+                    max_iou=0.0,
+                    dwell_duration=1.0,
+                    vehicle_ids=matching_ids,
+                    bbox=v_box,
+                    visual_model_score=0.92,
+                    visual_model_used=True,
+                    is_simulation=False,
                     description=f"Neural Visual Model: Confirmed vehicle accident collision in {v_lane} lane",
-                    bounding_box=v_box
+                    severity="critical"
                 )
                 self.active_incidents[inc_id] = inc
                 new_events.append(inc)
