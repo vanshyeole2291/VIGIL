@@ -136,6 +136,13 @@ class EvidenceOut(BaseModel):
     duration_sec: float
     checksum_sha256: Optional[str] = None
     created_at: float
+    thumbnail_b64: Optional[str] = None
+    snapshot_b64: Optional[str] = None
+    camera_id: Optional[str] = None
+    cctv_name: Optional[str] = None
+    lane: Optional[str] = None
+    incident_type: Optional[str] = None
+    description: Optional[str] = None
 
     class Config:
         from_attributes = True

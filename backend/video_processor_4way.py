@@ -497,7 +497,7 @@ class VideoProcessor4Way:
                     
                     if "accident" in a_type or "collision" in a_msg.lower() or "crash" in a_msg.lower():
                         if getattr(config, 'ENABLE_COLLISION_ALERTS', False):
-                            ranked_candidates.append((10, "accident", a_msg, a_lane, a_box))
+                            ranked_candidates.append((25, "accident", a_msg, a_lane, a_box))
                     # Filtered out: non-accident / routine crowd
                     # Filtered out: routine queue dwell
 
@@ -813,33 +813,35 @@ class VideoProcessor4Way:
                     lane_name = lane if (lane in quadrant_slices) else "East"
                     qy1, qy2, qx1, qx2 = quadrant_slices.get(lane_name, (0, qh, 0, qw))
 
-                    # Extract THAT camera image only (clean high-res single-camera frame)
-                    single_cam_img = target_frame[qy1:qy2, qx1:qx2].copy()
+                    # Extract THAT camera image only from clean raw frame (never corrupted by banners)
+                    clean_source = self.raw_frame if self.raw_frame is not None else target_frame
+                    single_cam_img = clean_source[qy1:qy2, qx1:qx2].copy()
                     _, cam_buf = cv2.imencode(".jpg", single_cam_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
                     single_cam_b64 = base64.b64encode(cam_buf.tobytes()).decode("utf-8")
 
-                    # 2. Balanced context crop (generous margin, never over-zoomed)
+                    # 2. Balanced context crop (generous margin, never over-zoomed or empty bar)
                     if bbox is not None:
                         bx1, by1, bx2, by2 = bbox
                     else:
                         bx1, by1, bx2, by2 = qx1 + int(qw * 0.2), qy1 + int(qh * 0.2), qx1 + int(qw * 0.8), qy1 + int(qh * 0.8)
 
-                    # Clamp to this single camera quadrant with generous 50% road context
+                    # Clamp to this single camera quadrant with generous road context
                     bx1 = max(qx1, min(qx2 - 40, bx1))
                     by1 = max(qy1, min(qy2 - 40, by1))
                     bx2 = max(bx1 + 40, min(qx2, bx2))
                     by2 = max(by1 + 40, min(qy2, by2))
 
-                    pad_x = max(int((bx2 - bx1) * 0.5), 60)
-                    pad_y = max(int((by2 - by1) * 0.5), 50)
+                    pad_x = max(int((bx2 - bx1) * 0.45), 60)
+                    pad_y = max(int((by2 - by1) * 0.45), 50)
                     cx1 = max(qx1, bx1 - pad_x)
                     cy1 = max(qy1, by1 - pad_y)
                     cx2 = min(qx2, bx2 + pad_x)
                     cy2 = min(qy2, by2 + pad_y)
 
-                    if (cx2 - cx1) >= 80 and (cy2 - cy1) >= 60:
-                        crop_img = target_frame[cy1:cy2, cx1:cx2].copy()
-                        _, crop_buf = cv2.imencode(".jpg", crop_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    # Require solid minimum dimensions (at least 120x90) so it never crops a thin banner strip
+                    if (cx2 - cx1) >= 120 and (cy2 - cy1) >= 90:
+                        crop_img = clean_source[cy1:cy2, cx1:cx2].copy()
+                        _, crop_buf = cv2.imencode(".jpg", crop_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
                         cropped_b64 = base64.b64encode(crop_buf.tobytes()).decode("utf-8")
                         crop_coords = [cx1 - qx1, cy1 - qy1, cx2 - cx1, cy2 - cy1]
                     else:
@@ -1019,41 +1021,32 @@ class VideoProcessor4Way:
         return ""
 
     def _seed_initial_incidents(self) -> List[Dict]:
-        now = time.time()
-        return [
-            {
-                "id": "INC_8921",
-                "type": "ambulance",
-                "lane": "North",
-                "description": "Class-1 Emergency Priority: Ambulance optical detection — arterial green wave corridor cleared.",
-                "timestamp": now - 180,
-                "frame_b64": self._get_lane_snapshot("North")
-            },
-            {
-                "id": "INC_8914",
-                "type": "crowd",
-                "lane": "East",
-                "description": "Pedestrian Crosswalk Safety: Mid-block pedestrian conflict hold — safe clearance extended (+12s).",
-                "timestamp": now - 450,
-                "frame_b64": self._get_lane_snapshot("East")
-            },
-            {
-                "id": "INC_8902",
-                "type": "parking",
-                "lane": "West",
-                "description": "Traffic Flow Obstruction: Stalled commercial vehicle flagged in West approach lane (>20s).",
-                "timestamp": now - 780,
-                "frame_b64": self._get_lane_snapshot("West")
-            },
-            {
-                "id": "INC_8890",
-                "type": "accident",
-                "lane": "South",
-                "description": "Kinematic Collision Confirmation: Two-vehicle proximity dwell resolved without sustained impact.",
-                "timestamp": now - 1200,
-                "frame_b64": self._get_lane_snapshot("South")
-            }
-        ]
+        """Load genuine incidents from persistent database or start empty."""
+        incidents = []
+        try:
+            db_session = SessionLocal()
+            try:
+                db_recs = db_session.query(db_models.Incident).order_by(db_models.Incident.timestamp.desc()).limit(20).all()
+                for rec in db_recs:
+                    incidents.append({
+                        "id": rec.id,
+                        "type": rec.incident_type,
+                        "lane": rec.lane,
+                        "camera_id": rec.camera_id,
+                        "cctv_name": getattr(rec, "cctv_name", None) or rec.camera_id,
+                        "description": rec.description,
+                        "timestamp": rec.timestamp,
+                        "frame_b64": rec.snapshot_b64,
+                        "camera_frame_b64": rec.snapshot_b64,
+                        "cropped_image_b64": rec.snapshot_b64,
+                        "vehicle_crop_b64": rec.snapshot_b64,
+                        "evidence_id": rec.evidence_id,
+                    })
+            finally:
+                db_session.close()
+        except Exception as e:
+            print(f"[Seed] Incident load note: {e}")
+        return incidents
 
     def set_quadrant_mapping(self, mapping: List[int]):
         if len(mapping) == 4:

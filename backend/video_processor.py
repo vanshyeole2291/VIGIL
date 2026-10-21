@@ -412,20 +412,32 @@ class VideoProcessor:
                     _, buf = cv2.imencode(".jpg", snap, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     b64_frame = base64.b64encode(buf.tobytes()).decode("utf-8")
 
+                    # Clean full frame representation
+                    clean_frame = self.raw_frame if self.raw_frame is not None else target_frame
+                    _, full_clean_buf = cv2.imencode(".jpg", clean_frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                    clean_full_b64 = base64.b64encode(full_clean_buf.tobytes()).decode("utf-8")
+
                     # Accurate ROI contextual crop if bbox provided
                     if bbox is not None and len(bbox) == 4:
                         bx1, by1, bx2, by2 = map(int, bbox)
-                        pad_x = max(int((bx2 - bx1) * 0.4), 40)
-                        pad_y = max(int((by2 - by1) * 0.4), 30)
+                        pad_x = max(int((bx2 - bx1) * 0.45), 60)
+                        pad_y = max(int((by2 - by1) * 0.45), 50)
                         cx1 = max(0, bx1 - pad_x)
                         cy1 = max(0, by1 - pad_y)
                         cx2 = min(fw, bx2 + pad_x)
                         cy2 = min(fh, by2 + pad_y)
-                        if (cx2 - cx1) >= 40 and (cy2 - cy1) >= 30:
-                            crop_img = target_frame[cy1:cy2, cx1:cx2].copy()
-                            _, crop_buf = cv2.imencode(".jpg", crop_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        # Require at least 120x90 px to avoid cropping thin banner strips
+                        if (cx2 - cx1) >= 120 and (cy2 - cy1) >= 90:
+                            crop_img = clean_frame[cy1:cy2, cx1:cx2].copy()
+                            _, crop_buf = cv2.imencode(".jpg", crop_img, [cv2.IMWRITE_JPEG_QUALITY, 92])
                             cropped_b64 = base64.b64encode(crop_buf.tobytes()).decode("utf-8")
                             crop_coords = [cx1, cy1, cx2 - cx1, cy2 - cy1]
+                        else:
+                            cropped_b64 = clean_full_b64
+                            crop_coords = [0, 0, fw, fh]
+                    else:
+                        cropped_b64 = clean_full_b64
+                        crop_coords = [0, 0, fw, fh]
                 except Exception as e:
                     print(f"[Single Cam Incident] Snapshot capture error: {e}")
 
@@ -509,7 +521,7 @@ class VideoProcessor:
                         status="new",
                         description=display_description,
                         evidence_id=ev_id if rel_clip_path else None,
-                        snapshot_b64=cropped_b64 or b64_frame,
+                        snapshot_b64=cropped_b64 or clean_full_b64 or b64_frame,
                         notes=f"Auto-captured from single-camera perception pipeline ({exact_camera_id}).",
                         supporting_evidence=json.dumps({
                             "lane": exact_lane_id,

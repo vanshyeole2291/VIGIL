@@ -18,7 +18,9 @@ FALLBACK_VIDEO_PATHS = [
 
 # YOLO model — custom fine-tuned weights for traffic & emergency vehicles
 USER_BEST_MODEL = r"C:\Users\HP\Downloads\model\model\best (12).pt"
-if os.path.exists(USER_BEST_MODEL):
+if os.path.exists(os.path.join(BASE_DIR, "models", "best_indian_traffic.pt")):
+    MODEL_NAME = os.path.join(BASE_DIR, "models", "best_indian_traffic.pt")
+elif os.path.exists(USER_BEST_MODEL):
     MODEL_NAME = USER_BEST_MODEL
 elif os.path.exists(os.path.join(BASE_DIR, "models", "best (12).pt")):
     MODEL_NAME = os.path.join(BASE_DIR, "models", "best (12).pt")

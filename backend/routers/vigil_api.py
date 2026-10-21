@@ -506,8 +506,63 @@ def acknowledge_all_alerts(
 
 @router.get("/evidence", response_model=List[schemas.EvidenceOut])
 def list_evidence(limit: int = 50, db: Session = Depends(get_db)):
-    """List forensic video clips and image captures saved on disk."""
-    return db.query(models.Evidence).order_by(desc(models.Evidence.created_at)).limit(limit).all()
+    """List forensic video clips and image captures saved on disk with enriched incident snapshots."""
+    ev_records = db.query(models.Evidence).order_by(desc(models.Evidence.created_at)).limit(limit).all()
+    results = []
+    for ev in ev_records:
+        thumb = None
+        cam_id = None
+        cctv_name = None
+        lane_str = None
+        inc_type = None
+        desc_str = None
+
+        if ev.incident_id:
+            inc = db.query(models.Incident).filter_by(id=ev.incident_id).first()
+            if inc:
+                thumb = inc.snapshot_b64
+                cam_id = inc.camera_id
+                cctv_name = getattr(inc, 'cctv_name', None) or inc.camera_id
+                lane_str = inc.lane
+                inc_type = inc.incident_type
+                desc_str = inc.description
+
+        # Fallback: if no thumbnail stored in incident, extract keyframe directly from file on disk
+        if not thumb and ev.file_path:
+            full_p = ev.file_path if os.path.isabs(ev.file_path) else os.path.join(PROJECT_ROOT, ev.file_path)
+            if os.path.exists(full_p):
+                try:
+                    if str(ev.file_type).startswith("video") or full_p.endswith((".mp4", ".avi", ".mkv")):
+                        cap = cv2.VideoCapture(full_p)
+                        ret, kframe = cap.read()
+                        cap.release()
+                        if ret and kframe is not None:
+                            _, kbuf = cv2.imencode(".jpg", kframe, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            thumb = base64.b64encode(kbuf.tobytes()).decode("utf-8")
+                    elif str(ev.file_type).startswith("image") or full_p.endswith((".jpg", ".jpeg", ".png")):
+                        with open(full_p, "rb") as img_f:
+                            thumb = base64.b64encode(img_f.read()).decode("utf-8")
+                except Exception:
+                    pass
+
+        results.append(schemas.EvidenceOut(
+            id=ev.id,
+            incident_id=ev.incident_id,
+            file_path=ev.file_path,
+            file_type=ev.file_type,
+            file_size_bytes=ev.file_size_bytes or 0,
+            duration_sec=ev.duration_sec or 0.0,
+            checksum_sha256=ev.checksum_sha256,
+            created_at=ev.created_at or 0.0,
+            thumbnail_b64=thumb,
+            snapshot_b64=thumb,
+            camera_id=cam_id,
+            cctv_name=cctv_name,
+            lane=lane_str,
+            incident_type=inc_type,
+            description=desc_str
+        ))
+    return results
 
 
 @router.get("/evidence/{evidence_id}/download")

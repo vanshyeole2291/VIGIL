@@ -85,6 +85,17 @@ class Detector:
     
     AVAILABLE_MODELS = [
         {
+            "id": "best_indian_traffic.pt",
+            "name": "best_indian_traffic.pt",
+            "label": "Indian Traffic & Ambulance Model (Fine-Tuned Auto-Rickshaw & Emergency)",
+            "architecture": "CSP + RefineDetect (Indian Traffic & Emergency)",
+            "params_m": 3.0,
+            "latency_ms": 7.2,
+            "map50": 0.965,
+            "precision": "Fine-Tuned Weights",
+            "recommended_for": "Dedicated Indian Auto-Rickshaws, Force Traveller ambulances & queue anti-false-alarm",
+        },
+        {
             "id": "yolov8_traffic_trained.pt",
             "name": "yolov8_traffic_trained.pt",
             "label": "Custom SOTA v12 (Your Trained Model — 81 Classes + Ambulance)",
@@ -211,31 +222,21 @@ class Detector:
             raw_label = self.names.get(cls_id, "unknown")
             label = str(raw_label).lower().strip()
             
-            # True ambulance prediction: verified by trained neural weights (class 80 or ambulance label)
-            amb_conf_thresh = getattr(config, 'AMBULANCE_CONFIDENCE_THRESHOLD', 0.30)
-            is_ambulance_pred = ((cls_id == 80 or label == "ambulance") or any(kw in label for kw in getattr(config, 'AMBULANCE_CLASS_KEYWORDS', ['ambulance']))) and (conf >= amb_conf_thresh)
-            
-            # True fire truck / fire engine prediction: verified by fine-tuned weights or keywords
-            is_fire_truck_pred = (label in ["fire_truck", "firetruck", "fire engine"] or any(kw in label for kw in getattr(config, 'EMERGENCY_CLASS_KEYWORDS', ['fire_truck', 'firetruck']))) and (conf >= amb_conf_thresh)
-            
-            # Area fraction to reject tiny distant background noise
+            aspect_ratio = float(box_width) / float(max(1, box_height))
             area_frac = (box_width * box_height) / float(w * h)
-            min_area_frac = getattr(config, 'AMBULANCE_MIN_AREA_FRAC', 0.001)
-            if is_ambulance_pred and area_frac < min_area_frac:
-                is_ambulance_pred = False
-            if is_fire_truck_pred and area_frac < min_area_frac:
-                is_fire_truck_pred = False
-
-            is_person = (label in ["person", "pedestrian", "crowd"])
-            is_vehicle = (label in ["car", "motorcycle", "bus", "truck", "ambulance", "fire_truck", "firetruck", "bicycle", "van", "suv", "auto", "vehicle"]) or (not is_person and label != "unknown")
-            has_emergency_lights = False
             
-            # Flashing emergency lightbar verification for true emergency vehicles:
+            is_person = (label in ["person", "pedestrian", "crowd"])
+            is_vehicle = (label in ["car", "motorcycle", "bus", "truck", "ambulance", "fire_truck", "firetruck", "bicycle", "van", "suv", "auto", "rickshaw", "vehicle"]) or (not is_person and label != "unknown")
+            has_emergency_lights = False
+            is_auto_rickshaw = False
+            
+            # Flashing emergency lightbar & Indian Auto-Rickshaw detection
             if is_vehicle and not is_person:
                 crop = frame[y1:y2, x1:x2]
                 if crop.size > 0:
                     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-                    roof_h = max(4, int(crop.shape[0] * 0.32))
+                    crop_area = max(1, crop.shape[0] * crop.shape[1])
+                    roof_h = max(4, int(crop.shape[0] * 0.30))
                     roof = hsv[:roof_h, :]
                     rf_area = max(1, roof.shape[0] * roof.shape[1])
                     
@@ -248,18 +249,40 @@ class Detector:
                     r_blue = cv2.inRange(roof, np.array([95, 90, 90]), np.array([135, 255, 255]))
                     roof_blue = cv2.countNonZero(r_blue) / rf_area
                     
-                    # If model classified as ambulance or fire truck, verify if strobes are flashing
-                    if is_ambulance_pred or is_fire_truck_pred:
-                        if (roof_red > 0.030 or roof_blue > 0.030):
-                            has_emergency_lights = True
-                    # Optical heuristic reclassification ONLY if explicitly enabled in config
-                    elif getattr(config, 'OPTICAL_AMBULANCE_HEURISTIC_ENABLED', False):
-                        white_mask = cv2.inRange(hsv, np.array([0, 0, 160]), np.array([180, 50, 255]))
-                        white_ratio = cv2.countNonZero(white_mask) / max(1, crop.shape[0] * crop.shape[1])
-                        if white_ratio >= getattr(config, 'AMBULANCE_WHITE_RATIO', 0.40) and (roof_red > 0.08 and roof_blue > 0.08):
-                            has_emergency_lights = True
-                            is_ambulance_pred = True
-                            label = "ambulance"
+                    if (roof_red > 0.025 or roof_blue > 0.025):
+                        has_emergency_lights = True
+                        
+                    # Auto-Rickshaw detection: yellow roof / green body with 3-wheeler aspect ratio
+                    yellow_roof_mask = cv2.inRange(roof, np.array([16, 60, 60]), np.array([36, 255, 255]))
+                    yellow_roof_ratio = cv2.countNonZero(yellow_roof_mask) / rf_area
+                    
+                    green_body_mask = cv2.inRange(hsv, np.array([35, 45, 35]), np.array([85, 255, 255]))
+                    green_body_ratio = cv2.countNonZero(green_body_mask) / crop_area
+                    
+                    if (0.58 <= aspect_ratio <= 1.25) and (yellow_roof_ratio > 0.12 or green_body_ratio > 0.10) and not has_emergency_lights:
+                        is_auto_rickshaw = True
+                    elif "rickshaw" in label or "auto" in label:
+                        is_auto_rickshaw = True
+
+            # If vehicle is an auto-rickshaw, strictly classify as auto and NEVER ambulance
+            if is_auto_rickshaw:
+                label = "auto"
+                is_ambulance_pred = False
+                is_fire_truck_pred = False
+            else:
+                amb_conf_thresh = getattr(config, 'AMBULANCE_CONFIDENCE_THRESHOLD', 0.50)
+                is_amb_class = (cls_id == 80 or label == "ambulance" or any(kw in label for kw in getattr(config, 'AMBULANCE_CLASS_KEYWORDS', ['ambulance'])))
+                min_area_frac = getattr(config, 'AMBULANCE_MIN_AREA_FRAC', 0.002)
+                
+                # Genuine ambulance: verified strobes OR high confidence on full-size vehicle
+                if is_amb_class and has_emergency_lights and (conf >= 0.28):
+                    is_ambulance_pred = True
+                elif is_amb_class and (conf >= amb_conf_thresh) and (area_frac >= min_area_frac):
+                    is_ambulance_pred = True
+                else:
+                    is_ambulance_pred = False
+
+                is_fire_truck_pred = (label in ["fire_truck", "firetruck", "fire engine"] or any(kw in label for kw in getattr(config, 'EMERGENCY_CLASS_KEYWORDS', ['fire_truck', 'firetruck']))) and (conf >= amb_conf_thresh) and (area_frac >= min_area_frac)
 
             is_ambulance = is_ambulance_pred
             is_fire_truck = is_fire_truck_pred

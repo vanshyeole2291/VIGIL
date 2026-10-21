@@ -65,7 +65,14 @@ function App() {
           }
           if (!seenIncidentIds.current.has(latest.id)) {
             seenIncidentIds.current.add(latest.id);
-            setActivePopup(latest);
+            setActivePopup((prev) => {
+              const isPrevAccident = prev && (prev.type === 'accident' || prev.incident_type === 'accident');
+              const isLatestAccident = latest.type === 'accident' || latest.incident_type === 'accident';
+              if (isPrevAccident && !isLatestAccident) {
+                return prev; // Accident alert maintains absolute top screen priority
+              }
+              return latest;
+            });
             if (popupTimer.current) clearTimeout(popupTimer.current);
             popupTimer.current = setTimeout(() => {
               if (isMounted) setActivePopup(null);
@@ -253,17 +260,21 @@ function App() {
 
       {/* 3. Sleek Compact Top Incident Alert Notification */}
       {activePopup && (
-        <div className="fixed top-3 right-5 z-50 max-w-sm sm:max-w-md w-full bg-[#0D1424]/95 border border-red-500/80 rounded-xl shadow-xl shadow-red-950/60 p-2.5 animate-in fade-in slide-in-from-top-3 duration-200 backdrop-blur-md flex items-center justify-between gap-3">
+        <div className={`fixed top-3 right-5 z-50 max-w-sm sm:max-w-md w-full bg-[#0D1424]/95 border ${
+          activePopup.type === 'accident' || activePopup.incident_type === 'accident' ? 'border-red-500/90 shadow-red-950/70' : 'border-cyan-500/80 shadow-cyan-950/50'
+        } rounded-xl shadow-xl p-2.5 animate-in fade-in slide-in-from-top-3 duration-200 backdrop-blur-md flex items-center justify-between gap-3`}>
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-red-400 animate-ping shrink-0"></span>
+            <span className={`w-2.5 h-2.5 rounded-full ${activePopup.type === 'accident' || activePopup.incident_type === 'accident' ? 'bg-red-400' : 'bg-cyan-400'} animate-ping shrink-0`}></span>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 leading-tight">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-wide text-red-400 shrink-0">
-                  {activePopup.type === 'ambulance' ? '🚑 Ambulance' : '🚨 Collision'}
+                <span className={`text-[10px] font-mono font-bold uppercase tracking-wide shrink-0 ${
+                  activePopup.type === 'accident' || activePopup.incident_type === 'accident' ? 'text-red-400 font-extrabold' : 'text-cyan-400 font-bold'
+                }`}>
+                  {activePopup.type === 'accident' || activePopup.incident_type === 'accident' ? '🚨 Collision / Accident' : '🚑 Ambulance'}
                 </span>
                 <span className="text-slate-600">·</span>
-                <span className="text-[10px] font-mono text-cyan-300 font-semibold truncate max-w-[130px]" title={activePopup.camera_id}>
-                  {activePopup.camera_id ? (activePopup.camera_id.startsWith('CCTV:') ? activePopup.camera_id : `CCTV: ${activePopup.camera_id}`) : 'CCTV'}
+                <span className="text-[10px] font-mono text-cyan-300 font-semibold truncate max-w-[130px]" title={activePopup.cctv_name || activePopup.camera_id}>
+                  {activePopup.cctv_name || (activePopup.camera_id ? (activePopup.camera_id.startsWith('CCTV:') ? activePopup.camera_id : `CCTV: ${activePopup.camera_id}`) : 'CCTV')}
                 </span>
               </div>
               <p className="text-[11px] text-slate-200 font-medium truncate mt-0.5">

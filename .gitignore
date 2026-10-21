@@ -47,6 +47,7 @@ ENV/
 # Training artifacts, large archives & datasets
 runs/
 dataset/
+datasets/
 dataset.zip
 best/
 *.cache
