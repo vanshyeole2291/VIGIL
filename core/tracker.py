@@ -295,21 +295,22 @@ class CentroidTracker:
             track.x1, track.y1, track.x2, track.y2 = det.box
             track.confidence = round(float(getattr(det, 'confidence', track.confidence)), 2)
             track.lane = getattr(det, 'lane', track.lane)
-            has_amb_signal = det.is_ambulance or (det.label == "ambulance" and getattr(det, 'has_emergency_lights', False))
-            has_fire_signal = getattr(det, 'is_fire_truck', False) or (det.label in ["fire_truck", "firetruck"] and getattr(det, 'has_emergency_lights', False))
-            has_em_signal = has_amb_signal or has_fire_signal or getattr(det, 'is_emergency_vehicle', False)
-            if has_em_signal:
-                track.ambulance_votes = min(15, track.ambulance_votes + 3)
+            # Strictly verify this specific detection's emergency credentials (never bleed to other cars)
+            is_this_det_amb = bool(getattr(det, 'is_ambulance', False) or (det.label == "ambulance" and getattr(det, 'has_emergency_lights', False)))
+            is_this_det_fire = bool(getattr(det, 'is_fire_truck', False) or (det.label in ["fire_truck", "firetruck"] and getattr(det, 'has_emergency_lights', False)))
+            
+            if is_this_det_amb or is_this_det_fire:
+                track.ambulance_votes = min(10, track.ambulance_votes + 2)
                 if track.ambulance_votes >= 2:
-                    track.is_ambulance = has_amb_signal or not has_fire_signal
-                    track.is_fire_truck = has_fire_signal
+                    track.is_ambulance = is_this_det_amb
+                    track.is_fire_truck = is_this_det_fire
                     track.is_emergency_vehicle = True
-                    track.label = "fire_truck" if has_fire_signal else "ambulance"
+                    track.label = "fire_truck" if is_this_det_fire else "ambulance"
                     track.pcu = 0.0
                     track.last_ambulance_time = now
             else:
                 track.ambulance_votes = max(0, track.ambulance_votes - 1)
-                # If emergency votes dropped to 0, demote to detected class
+                # Demote immediately to detected normal vehicle class
                 if track.ambulance_votes <= 0:
                     track.is_ambulance = False
                     track.is_fire_truck = False
@@ -317,9 +318,11 @@ class CentroidTracker:
                     track.label = det.label
                     track.pcu = getattr(det, 'pcu', 1.0)
                 else:
-                    # Brief occlusion buffer while overlapping
-                    track.is_emergency_vehicle = True
-                    track.pcu = 0.0
+                    # If this track was not genuinely an ambulance, clear emergency status
+                    if not track.is_ambulance and not track.is_fire_truck:
+                        track.is_emergency_vehicle = False
+                        track.label = det.label
+                        track.pcu = getattr(det, 'pcu', 1.0)
             track.last_seen = now
             track.frames_tracked += 1
             track.frames_missing = 0
@@ -350,10 +353,10 @@ class CentroidTracker:
     
     def _register(self, det) -> Track:
         """Instantiate and track a new object detection."""
-        has_amb_signal = det.is_ambulance or (det.label == "ambulance" and getattr(det, 'has_emergency_lights', False))
-        has_fire_signal = getattr(det, 'is_fire_truck', False) or (det.label in ["fire_truck", "firetruck"] and getattr(det, 'has_emergency_lights', False))
-        has_em_signal = has_amb_signal or has_fire_signal or getattr(det, 'is_emergency_vehicle', False)
-        assigned_label = "fire_truck" if has_fire_signal else ("ambulance" if has_amb_signal else det.label)
+        is_this_det_amb = bool(getattr(det, 'is_ambulance', False) or (det.label == "ambulance" and getattr(det, 'has_emergency_lights', False)))
+        is_this_det_fire = bool(getattr(det, 'is_fire_truck', False) or (det.label in ["fire_truck", "firetruck"] and getattr(det, 'has_emergency_lights', False)))
+        is_em = is_this_det_amb or is_this_det_fire
+        assigned_label = "fire_truck" if is_this_det_fire else ("ambulance" if is_this_det_amb else det.label)
         track = Track(
             track_id=self._next_id,
             label=assigned_label,
@@ -362,11 +365,11 @@ class CentroidTracker:
             x2=det.x2, y2=det.y2,
             is_vehicle=det.is_vehicle,
             is_person=det.is_person,
-            is_ambulance=has_amb_signal or (has_em_signal and not has_fire_signal),
-            is_fire_truck=has_fire_signal,
-            is_emergency_vehicle=has_em_signal,
-            ambulance_votes=3 if has_em_signal else 0,
-            pcu=0.0 if has_em_signal else getattr(det, 'pcu', 1.0),
+            is_ambulance=is_this_det_amb,
+            is_fire_truck=is_this_det_fire,
+            is_emergency_vehicle=is_em,
+            ambulance_votes=2 if is_em else 0,
+            pcu=0.0 if is_em else getattr(det, 'pcu', 1.0),
             confidence=round(float(getattr(det, 'confidence', 0.85)), 2),
             lane=getattr(det, 'lane', None),
         )

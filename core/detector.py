@@ -249,7 +249,8 @@ class Detector:
                     r_blue = cv2.inRange(roof, np.array([95, 90, 90]), np.array([135, 255, 255]))
                     roof_blue = cv2.countNonZero(r_blue) / rf_area
                     
-                    if (roof_red > 0.025 or roof_blue > 0.025):
+                    # Verified emergency optical lightbar: concentrated high-saturation strobes
+                    if (roof_red > 0.065 or roof_blue > 0.065 or (roof_red > 0.025 and roof_blue > 0.025)):
                         has_emergency_lights = True
                         
                     # Auto-Rickshaw detection: yellow roof / green body with 3-wheeler aspect ratio
@@ -274,8 +275,8 @@ class Detector:
                 is_amb_class = (cls_id == 80 or label == "ambulance" or any(kw in label for kw in getattr(config, 'AMBULANCE_CLASS_KEYWORDS', ['ambulance'])))
                 min_area_frac = getattr(config, 'AMBULANCE_MIN_AREA_FRAC', 0.002)
                 
-                # Genuine ambulance: verified strobes OR high confidence on full-size vehicle
-                if is_amb_class and has_emergency_lights and (conf >= 0.28):
+                # Genuine ambulance: verified strobes OR calibrated high confidence on full-size vehicle
+                if is_amb_class and has_emergency_lights and (conf >= 0.45):
                     is_ambulance_pred = True
                 elif is_amb_class and (conf >= amb_conf_thresh) and (area_frac >= min_area_frac):
                     is_ambulance_pred = True

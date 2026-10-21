@@ -177,7 +177,11 @@ class SignalOptimizer:
         for name in self.PHASE_ORDER:
             ratio = demands[name] / total_demand
             raw_gi = ratio * effective_green
-            gi = round(float(max(min_green, min(max_green, raw_gi))), 1)
+            # Low/empty demand lanes receive brief clearance (5s), heavy lanes receive extended time
+            if demands[name] <= 0.6:
+                gi = 5.0
+            else:
+                gi = round(float(max(min_green, min(max_green, raw_gi))), 1)
             splits[name] = gi
             
         # Guarantee ordering invariant: highest demand lane strictly receives >= green time
@@ -262,7 +266,7 @@ class SignalOptimizer:
         """Disengage emergency preemption and resume equitable cycling."""
         self.emergency_active = False
         self.emergency_lane   = None
-        self._emergency_cooldown_until = time.time() + 12.0
+        self._emergency_cooldown_until = 0.0  # Immediate reset so genuine visual ambulances are never blocked
         self._in_yellow = False
         
         # Restore and advance to next waiting phase
@@ -311,8 +315,8 @@ class SignalOptimizer:
         
         cooldown_ok = now > getattr(self, '_emergency_cooldown_until', 0.0)
         
-        # Visual is the PRIMARY mechanism
-        if visual_emergency_lanes and getattr(config, 'AMBULANCE_OVERRIDE', True) and (self.emergency_active or cooldown_ok):
+        # Visual is the PRIMARY mechanism: IMMEDIATE preemption, never blocked by cooldown
+        if visual_emergency_lanes and getattr(config, 'AMBULANCE_OVERRIDE', True):
             self._last_amb_time = now
             target = visual_emergency_lanes[0]
             if not self.emergency_active or self.emergency_lane != target or self.emergency_source != "visual":
@@ -323,11 +327,11 @@ class SignalOptimizer:
                 target_audio = audio_lane if (audio_lane in self.PHASE_ORDER) else self.current_lane
                 self.trigger_emergency(target_audio, source="audio")
         elif self.emergency_active:
-            # Clear if emergency vehicle / siren has cleared and hold duration passed
+            # Clear ONLY when visual emergency vehicle has fully cleared the quadrant
             hold_sec = getattr(config, 'EMERGENCY_GREEN_HOLD', 12.0)
             if self.emergency_source == "visual":
-                amb_cleared = (now - getattr(self, '_last_amb_time', 0.0) > 4.5)
-                if not visual_emergency_lanes and ((now - self.emergency_start > hold_sec) or amb_cleared):
+                amb_cleared = (now - getattr(self, '_last_amb_time', 0.0) > 3.0)
+                if not visual_emergency_lanes and amb_cleared:
                     self.clear_emergency()
             elif self.emergency_source == "audio":
                 if not has_audio_siren and (now - self.emergency_start > hold_sec):
@@ -467,9 +471,21 @@ class SignalOptimizer:
             return
         stats = lane_stats.get(self.current_lane)
         if stats:
-            new_dur = self.compute_green_time(stats, lane_stats)
             now = time.time()
             elapsed = now - self._phase_start
+            veh_count = getattr(stats, 'vehicle_count', 0)
+            queue_len = getattr(stats, 'queue_length', 0)
+            
+            # Dynamic early truncation: if green lane has completely emptied out after at least 6s,
+            # advance immediately to waiting heavy traffic
+            if elapsed >= 6.0 and veh_count == 0 and queue_len == 0:
+                other_demands = sum(getattr(lane_stats.get(l), 'vehicle_count', 0) for l in self.PHASE_ORDER if l != self.current_lane)
+                if other_demands > 0:
+                    self._phase_duration = elapsed
+                    self.signals[self.current_lane].time_left = 0.0
+                    return
+            
+            new_dur = self.compute_green_time(stats, lane_stats)
             self._phase_duration = max(elapsed + 2.0, new_dur)
             self.signals[self.current_lane].time_left = max(0.0, self._phase_duration - elapsed)
 

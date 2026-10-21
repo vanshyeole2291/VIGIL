@@ -123,9 +123,10 @@ class TrafficAnalyzer:
         
         # ── Emergency Vehicle (Ambulance & Fire Truck) alerts & preemption ───
         for track in tracks:
-            is_ft = getattr(track, 'is_fire_truck', False) or track.label in ["fire_truck", "firetruck"]
-            is_amb = track.is_ambulance or track.label == "ambulance"
-            is_em = getattr(track, 'is_emergency_vehicle', False) or is_amb or is_ft
+            is_ft = bool(getattr(track, 'is_fire_truck', False) or track.label in ["fire_truck", "firetruck"])
+            # Strictly verified emergency ambulance — normal traffic classes can never trigger emergency
+            is_amb = bool((getattr(track, 'is_ambulance', False) or track.label == "ambulance") and track.label not in ["car", "bus", "truck", "motorcycle", "auto", "rickshaw"])
+            is_em = is_amb or is_ft
             if is_em:
                 em_name = "FIRE TRUCK" if is_ft else "AMBULANCE"
                 em_icon = "🚒" if is_ft else "🚑"

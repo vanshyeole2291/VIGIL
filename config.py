@@ -99,8 +99,8 @@ WEBSTER_MAX_CYCLE           = 120.0  # Upper bound on cycle length (seconds)
 # ─── Emergency Preemption & Audio Siren Detection ────────────────────────────
 AMBULANCE_OVERRIDE        = True   # Enable visual emergency preemption
 OPTICAL_AMBULANCE_HEURISTIC_ENABLED = False # In heavy traffic, do not force-reclassify normal white cars as ambulances
-AMBULANCE_CONFIDENCE_THRESHOLD = 0.30 # Calibrated neural confidence threshold: detects genuine Force Traveller ambulance, strictly rejects false bus/car classifications
-AMBULANCE_MIN_AREA_FRAC   = 0.001  # Rejects small vehicles/cars in traffic jams; ambulances are larger vehicles
+AMBULANCE_CONFIDENCE_THRESHOLD = 0.58 # Calibrated neural confidence threshold: detects genuine Force Traveller ambulance, strictly rejects false bus/car classifications
+AMBULANCE_MIN_AREA_FRAC   = 0.003  # Rejects small vehicles/cars in traffic jams; ambulances are larger vehicles
 AMBULANCE_WHITE_RATIO     = 0.35   # High threshold for emergency vehicle white body surface
 AMBULANCE_EMERGENCY_SCORE = 5.0    # Strict threshold requiring dedicated strobe flashers
 AUDIO_SIREN_ENABLED       = True   # Enable acoustic siren analysis
