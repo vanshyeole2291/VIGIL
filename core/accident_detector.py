@@ -312,8 +312,16 @@ class AccidentDetector:
                     v_lane = t.lane or v_lane
                     matching_ids.append(t.track_id)
             last_cd = self._lane_cooldowns.get(f"{v_lane}_visual", 0.0)
-            if now > last_cd:
-                self._lane_cooldowns[f"{v_lane}_visual"] = now + 10.0
+            prev_center = self._lane_cooldowns.get(f"{v_lane}_center")
+            is_diff_loc = False
+            if prev_center:
+                dist = ((cx - prev_center[0])**2 + (cy - prev_center[1])**2)**0.5
+                if dist > 80.0:
+                    is_diff_loc = True
+
+            if (now > last_cd) or is_diff_loc:
+                self._lane_cooldowns[f"{v_lane}_visual"] = now + 3.0
+                self._lane_cooldowns[f"{v_lane}_center"] = (cx, cy)
                 inc_id = f"inc-{uuid.uuid4().hex[:8]}"
                 inc = AccidentIncident(
                     incident_id=inc_id,

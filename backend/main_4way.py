@@ -228,10 +228,10 @@ async def api_incidents():
             seen_times = {}
             for inc in records:
                 c_id = inc.camera_id or (f"CCTV: {inc.lane}" if inc.lane else "CCTV: Camera-01")
-                # Deduplicate: suppress rapid duplicate bursts (<10s) of same event
-                event_key = (inc.incident_type, c_id)
+                # Deduplicate: suppress rapid duplicate bursts of the exact same event description
+                event_key = (inc.incident_type, c_id, inc.description)
                 inc_ts = float(inc.timestamp or 0)
-                if event_key in seen_times and abs(inc_ts - seen_times[event_key]) < 10.0:
+                if event_key in seen_times and abs(inc_ts - seen_times[event_key]) < 5.0:
                     continue
                 seen_times[event_key] = inc_ts
 

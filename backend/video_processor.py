@@ -368,12 +368,27 @@ class VideoProcessor:
 
         dedup_key = f"{inc_type}:{exact_camera_id}"
         with self.state_lock:
-            last_logged = getattr(self, '_active_logged_events', {}).get(dedup_key, 0.0)
-            if now - last_logged < 10.0:   # 10s debouncing cooldown prevents duplicate bursts
-                return
-            if not hasattr(self, '_active_logged_events'):
-                self._active_logged_events = {}
-            self._active_logged_events[dedup_key] = now
+            if not hasattr(self, '_last_incident_positions'):
+                self._last_incident_positions = {}
+            
+            curr_cx, curr_cy = -1.0, -1.0
+            if bbox is not None and len(bbox) == 4:
+                curr_cx = float(bbox[0] + bbox[2]) / 2.0
+                curr_cy = float(bbox[1] + bbox[3]) / 2.0
+            
+            last_pos = self._last_incident_positions.get(dedup_key)
+            if last_pos is not None:
+                last_cx, last_cy, last_ts = last_pos
+                elapsed = now - last_ts
+                if curr_cx >= 0 and last_cx >= 0:
+                    dist = ((curr_cx - last_cx)**2 + (curr_cy - last_cy)**2)**0.5
+                    # Same incident spatial debounce (within 80px and 12s)
+                    if dist < 80.0 and elapsed < 12.0:
+                        return
+                elif elapsed < 3.0:
+                    return
+
+            self._last_incident_positions[dedup_key] = (curr_cx, curr_cy, now)
 
             target_frame = frame if frame is not None else self.latest_frame
             if target_frame is None and self.raw_frame is not None:
@@ -471,12 +486,16 @@ class VideoProcessor:
             try:
                 db_session = SessionLocal()
                 try:
-                    # Database-level deduplication: suppress duplicate if logged within 600 seconds
+                    # Database-level deduplication: suppress rapid duplicate burst for same location
                     recent_db = db_session.query(db_models.Incident).filter_by(
                         incident_type=inc_type,
                         camera_id=exact_camera_id
-                    ).filter(db_models.Incident.timestamp > now - 10.0).first()
-                    if recent_db:
+                    ).filter(db_models.Incident.timestamp > now - 2.0).first()
+                    if recent_db and last_pos is not None and curr_cx >= 0 and last_pos[0] >= 0:
+                        db_dist = ((curr_cx - last_pos[0])**2 + (curr_cy - last_pos[1])**2)**0.5
+                        if db_dist < 80.0:
+                            return
+                    elif recent_db and last_pos is None:
                         return
 
                     cam_rec = db_session.query(db_models.Camera).filter_by(id=exact_camera_id).first()

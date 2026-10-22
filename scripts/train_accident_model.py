@@ -73,8 +73,8 @@ def harvest_dataset():
         cap = cv2.VideoCapture(str(south_path))
         print("Processing south.mp4 for all 7 accident scenes...")
         
-        # Scene 1: Orange car collision (frames 235-255)
-        for f in [238, 242, 248, 252, 255]:
+        # Scene 1: Orange car collision (frames 160-257)
+        for f in [160, 180, 200, 220, 235, 238, 242, 248, 252, 255]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
@@ -83,100 +83,100 @@ def harvest_dataset():
                 f"6 {to_yolo(180, 150, 390, 298, fw, fh)}",  # Class 6: accident
                 f"0 {to_yolo(48, 117, 182, 196, fw, fh)}"   # Class 0: car
             ]
-            split = "val" if (f == 248) else "train"
+            split = "val" if (f in [200, 248]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc1_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc1_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             lbl_file.write_text("\n".join(lines), encoding="utf-8")
             samples_created += 1
 
-        # Scene 2: Smashed white car in junction (frames 300-615)
-        for f in [350, 450, 550, 610, 615]:
+        # Scene 2: Smashed white car in dark junction (frames 270-618)
+        for f in [280, 320, 360, 400, 440, 480, 518, 530, 550, 580, 600, 615]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
             fh, fw = frame.shape[:2]
             lines = [
-                f"6 {to_yolo(475, 110, 545, 178, fw, fh)}",  # Class 6: accident
+                f"6 {to_yolo(470, 105, 555, 178, fw, fh)}",  # Class 6: accident
                 f"0 {to_yolo(398, 166, 499, 359, fw, fh)}"   # Class 0: car
             ]
-            split = "val" if (f == 610) else "train"
+            split = "val" if (f in [360, 600]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc2_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc2_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             lbl_file.write_text("\n".join(lines), encoding="utf-8")
             samples_created += 1
 
-        # Scene 3: Truck collision with dust cloud (frames 960-985)
-        for f in [965, 970, 975, 980, 985]:
+        # Scene 3: Truck collision with dust cloud (frames 660-985)
+        for f in [660, 700, 760, 820, 880, 920, 960, 970, 975, 980, 985]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
             fh, fw = frame.shape[:2]
             lines = [
-                f"6 {to_yolo(470, 220, 620, 370, fw, fh)}",  # Class 6: accident
+                f"6 {to_yolo(470, 210, 630, 370, fw, fh)}",  # Class 6: accident
                 f"0 {to_yolo(90, 117, 171, 163, fw, fh)}"    # Class 0: car
             ]
-            split = "val" if (f == 980) else "train"
+            split = "val" if (f in [760, 980]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc3_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc3_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             lbl_file.write_text("\n".join(lines), encoding="utf-8")
             samples_created += 1
 
-        # Scene 4: Damaged white car in debris (frames 1120-1140)
-        for f in [1120, 1125, 1130, 1135, 1140]:
+        # Scene 4: Damaged white car in roadside rubble (frames 990-1140)
+        for f in [1000, 1030, 1060, 1090, 1110, 1120, 1125, 1130, 1135, 1140]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
             fh, fw = frame.shape[:2]
             lines = [
-                f"6 {to_yolo(80, 50, 435, 185, fw, fh)}",    # Class 6: accident (NOT ambulance)
+                f"6 {to_yolo(80, 50, 435, 190, fw, fh)}",    # Class 6: accident (NOT ambulance)
                 f"0 {to_yolo(559, 39, 639, 92, fw, fh)}"     # Class 0: car
             ]
-            split = "val" if (f == 1130) else "train"
+            split = "val" if (f in [1060, 1130]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc4_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc4_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             lbl_file.write_text("\n".join(lines), encoding="utf-8")
             samples_created += 1
 
-        # Scene 5: Highway multi-car crash with people (frames 1715-1740)
-        for f in [1720, 1725, 1730, 1735, 1740]:
+        # Scene 5: Highway multi-car crash with people (frames 1180-1740)
+        for f in [1200, 1260, 1320, 1380, 1440, 1500, 1560, 1620, 1680, 1710, 1720, 1725, 1730, 1735, 1740]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
             fh, fw = frame.shape[:2]
             lines = [
-                f"6 {to_yolo(20, 140, 480, 358, fw, fh)}",   # Class 6: accident
+                f"6 {to_yolo(20, 120, 480, 358, fw, fh)}",   # Class 6: accident
                 f"3 {to_yolo(415, 75, 575, 200, fw, fh)}"    # Class 3: truck/van (NOT ambulance!)
             ]
-            split = "val" if (f == 1730) else "train"
+            split = "val" if (f in [1380, 1730]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc5_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc5_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             lbl_file.write_text("\n".join(lines), encoding="utf-8")
             samples_created += 1
 
-        # Scene 6: Intersection T-bone collision (frames 1965-1980)
-        for f in [1965, 1970, 1975, 1980]:
+        # Scene 6: Intersection T-bone collision (frames 1760-1980)
+        for f in [1760, 1800, 1840, 1880, 1920, 1960, 1965, 1970, 1975, 1980]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
             fh, fw = frame.shape[:2]
             lines = [
-                f"6 {to_yolo(265, 70, 445, 230, fw, fh)}",   # Class 6: accident
+                f"6 {to_yolo(255, 65, 445, 235, fw, fh)}",   # Class 6: accident
                 f"0 {to_yolo(0, 208, 101, 357, fw, fh)}"     # Class 0: car
             ]
-            split = "val" if (f == 1975) else "train"
+            split = "val" if (f in [1840, 1975]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc6_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc6_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
             lbl_file.write_text("\n".join(lines), encoding="utf-8")
             samples_created += 1
 
-        # Scene 7: Guardrail collision (frames 2250-2280)
-        for f in [2255, 2265, 2270, 2280]:
+        # Scene 7: Guardrail collision (frames 2010-2295)
+        for f in [2020, 2050, 2080, 2110, 2140, 2170, 2200, 2230, 2250, 2260, 2270, 2280, 2290]:
             cap.set(cv2.CAP_PROP_POS_FRAMES, f)
             ret, frame = cap.read()
             if not ret or frame is None: continue
@@ -185,7 +185,7 @@ def harvest_dataset():
                 f"6 {to_yolo(85, 105, 225, 175, fw, fh)}",   # Class 6: accident
                 f"0 {to_yolo(511, 107, 580, 161, fw, fh)}"   # Class 0: car
             ]
-            split = "val" if (f == 2270) else "train"
+            split = "val" if (f in [2110, 2270]) else "train"
             img_file = DATASET_DIR / "images" / split / f"south_sc7_{f}.jpg"
             lbl_file = DATASET_DIR / "labels" / split / f"south_sc7_{f}.txt"
             cv2.imwrite(str(img_file), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -327,9 +327,9 @@ def train_accident_model(yaml_path: str):
     print(f"[Training] Base neural network: {base_model_path}")
     model = YOLO(str(base_model_path))
 
-    epochs = 5
+    epochs = 8
     imgsz = 416
-    batch = 4
+    batch = 8
 
     print(f"[Training] Hyperparameters: epochs={epochs}, imgsz={imgsz}, batch={batch}, device=cpu")
     run_dir = PROJECT_ROOT / "runs" / "train"
